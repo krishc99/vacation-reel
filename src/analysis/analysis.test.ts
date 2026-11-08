@@ -113,8 +113,8 @@ describe('bursts', () => {
     const ids = groupBursts([
       { id: 'a', takenAt: T0, timeSource: 'exif', dhash: H(0) },
       { id: 'b', takenAt: T0 + 1000, timeSource: 'exif', dhash: H(0xff) }, // 8 bits, 1s → same
-      { id: 'c', takenAt: T0 + 20_000, timeSource: 'exif', dhash: H(0xf) }, // 4 from a, 20s → same
-      { id: 'd', takenAt: T0 + 25_000, timeSource: 'exif', dhash: H(0xffffff) }, // 24 bits → new
+      { id: 'c', takenAt: T0 + 10_000, timeSource: 'exif', dhash: H(0xf) }, // 4 from a, 10s → same
+      { id: 'd', takenAt: T0 + 12_000, timeSource: 'exif', dhash: H(0xffffff) }, // 24 bits → new
       { id: 'e', takenAt: T0 + 3_600_000, timeSource: 'exif', dhash: H(0xffffff) }, // 1h later → new
     ]);
     expect(ids).toEqual([['a', 'b', 'c'], ['d'], ['e']]);
@@ -172,6 +172,21 @@ describe('analyzeAlbum', () => {
     ];
     const a = analyzeAlbum(items);
     expect([...a.verdicts.values()].filter((v) => v.status === 'rejected')).toEqual([]);
+  });
+
+  it('a clean shot of a DIFFERENT scene never replaces a soft one (food vs friends)', () => {
+    const items = [
+      item('food', 0, { ...good, sharpness: 1.3 }, 0x00000000),
+      item('friends-soft', 1, { ...good, sharpness: 0.1 }, 0xffffffff), // 32 bits away
+    ];
+    const a = analyzeAlbum(items);
+    expect(a.verdicts.get('friends-soft')!.status).toBe('keeper');
+    expect(a.verdicts.get('friends-soft')!.onlyOfMoment).toBe(true);
+  });
+
+  it('slightly soft (phone noise reduction) is not a defect', () => {
+    const a = analyzeAlbum([item('g', 0, good, 0), item('soft', 1, { ...good, sharpness: 0.2 }, 1)]);
+    expect(a.verdicts.get('soft')!.reasons).toEqual([]);
   });
 
   it('picks the sharpest frame of a burst as keeper', () => {

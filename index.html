@@ -46,6 +46,29 @@
         <ol id="grid" class="grid"></ol>
       </section>
 
+      <section id="music-section" class="step" aria-labelledby="step-music" hidden>
+        <h2 id="step-music">Music</h2>
+        <div class="actions">
+          <label id="music-pick" class="btn" for="audio-input">
+            <input id="audio-input" class="visually-hidden" type="file" accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg,.flac" />
+            <span>Choose a song</span>
+          </label>
+        </div>
+        <p id="music-status" class="status" aria-live="polite">Optional. Cuts land on the beat. The song never leaves this device.</p>
+        <div id="music-controls" class="music-controls" hidden>
+          <fieldset class="seg" aria-label="Which part of the song">
+            <label><input type="radio" name="song-start" id="song-best" value="best" checked /> <span>Best part</span></label>
+            <label><input type="radio" name="song-start" id="song-start" value="start" /> <span>From the start</span></label>
+          </fieldset>
+          <label class="check" for="music-in-file">
+            <input type="checkbox" id="music-in-file" checked />
+            <span>Put the song in the video file</span>
+          </label>
+          <p class="status">Untick to export silent with the same cuts, then pick the song in Instagram's music library.</p>
+          <button id="music-remove" class="btn btn--quiet" type="button">Remove song</button>
+        </div>
+      </section>
+
       <section id="make-section" class="step" aria-labelledby="step-make" hidden>
         <h2 id="step-make">Make the reel</h2>
         <div class="actions">
@@ -66,7 +89,7 @@
               <a id="download" class="btn btn--primary" download="vacation-reel.mp4">Download MP4</a>
               <button id="share" class="btn" type="button" hidden>Share…</button>
             </div>
-            <p class="status">No music yet. Add a track from Instagram's library when you post.</p>
+            <p id="result-note" class="status"></p>
           </div>
         </div>
       </section>

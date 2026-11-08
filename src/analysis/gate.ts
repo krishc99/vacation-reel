@@ -1,4 +1,5 @@
 import { groupBursts, groupMoments, type BurstInput } from './bursts';
+import { hamming } from './dhash';
 import type { QualityStats } from './quality';
 
 export type Reason = 'blurry' | 'dark' | 'bright';
@@ -35,14 +36,21 @@ export const GATE_DEFAULTS = {
   momentGapSec: 5 * 60,
   weights: { sharp: 0.6, exposure: 0.25, noise: 0.15 },
   /**
-   * Absolute defect thresholds. Sharpness is content-independent (see quality.ts):
-   * sample sharp photos of faces/food/landscapes measured 0.4–1.4, blurred ≤ 0.2.
+   * Only clearly unusable photos count as defective. Sample sharp photos measured
+   * 0.4–1.4 and visibly blurred ones ≤ 0.2; phone noise reduction softens indoor
+   * and night shots of people, so the cut sits well below the sharp range.
    */
-  blurryBelow: 0.25,
-  darkMeanBelow: 0.12,
-  darkClipAbove: 0.6,
-  brightMeanAbove: 0.88,
-  brightClipAbove: 0.45,
+  blurryBelow: 0.15,
+  darkMeanBelow: 0.07,
+  darkClipAbove: 0.75,
+  brightMeanAbove: 0.93,
+  brightClipAbove: 0.6,
+  /**
+   * A defective photo is only replaced by a clean shot of the SAME scene (dHash
+   * distance ≤ this). Without it, a sharp plate of food could stand in for a
+   * slightly soft photo of friends at the same dinner. Faces arrive in M4.
+   */
+  sameSceneMaxDist: 22,
 };
 
 /** 0 = worst in album, 1 = best; ties share the average rank. */
@@ -116,17 +124,20 @@ export function analyzeAlbum(sortedItems: AnalysisInput[], opts = GATE_DEFAULTS)
   });
 
   // Gate applies to burst keepers; alternates are already out.
-  // Set aside = has a real defect AND the same moment has a clean shot.
+  // Set aside = clearly unusable AND a clean shot of the same scene exists in the same moment.
   // (The plan's "bottom 20th percentile" rule ranked sharp portraits below sharp
   // food/landscapes, because detail amount ≠ quality. Percentiles return in M7 scoring.)
   const keepers = bursts.map((b) => sortedItems[idx.get(b.keeperId)!]);
   const fails = new Set(keepers.filter((p) => verdicts.get(p.id)!.reasons.length > 0).map((p) => p.id));
+  const hashOf = (id: string) => sortedItems[idx.get(id)!].dhash;
   for (const moment of groupMoments(keepers, opts.momentGapSec)) {
-    const hasGood = moment.some((id) => !fails.has(id));
     for (const id of moment) {
       if (!fails.has(id)) continue;
       const v = verdicts.get(id)!;
-      if (hasGood) v.status = 'rejected';
+      const replacement = moment.some(
+        (other) => !fails.has(other) && hamming(hashOf(id), hashOf(other)) <= opts.sameSceneMaxDist,
+      );
+      if (replacement) v.status = 'rejected';
       else v.onlyOfMoment = true;
     }
   }

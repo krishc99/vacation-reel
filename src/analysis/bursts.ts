@@ -9,11 +9,11 @@ export interface BurstInput {
 
 export const BURST_DEFAULTS = {
   /** Rapid-fire: within this many seconds, allow more visual change (people moving). */
-  fastWindowSec: 3,
-  fastMaxDist: 20,
+  fastWindowSec: 2,
+  fastMaxDist: 14,
   /** Same moment re-shot: wider window, stricter visual match. */
-  windowSec: 30,
-  maxDist: 12,
+  windowSec: 15,
+  maxDist: 10,
   /** No EXIF time: only adjacent photos that look near-identical. */
   noTimeMaxDist: 8,
   /** Compare against this many most recent burst members (chain linking). */

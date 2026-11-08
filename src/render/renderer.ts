@@ -1,8 +1,9 @@
+import type { ReelAudio } from '../audio/song';
 import type { Clip, Photo, ReelSettings, RenderRequest, RenderResponse } from '../types';
 import RenderWorker from '../workers/render.worker?worker';
 
 export interface RenderJob {
-  promise: Promise<{ blob: Blob; durationSec: number }>;
+  promise: Promise<{ blob: Blob; durationSec: number; audioCodec: string | null }>;
   cancel(): void;
 }
 
@@ -12,17 +13,18 @@ export function renderReel(
   photos: Photo[],
   settings: ReelSettings,
   onProgress: (done: number, total: number, stage: string) => void,
+  audio?: ReelAudio,
 ): RenderJob {
   const worker = new RenderWorker();
   let rejectFn: (e: Error) => void = () => {};
-  const promise = new Promise<{ blob: Blob; durationSec: number }>((resolve, reject) => {
+  const promise = new Promise<{ blob: Blob; durationSec: number; audioCodec: string | null }>((resolve, reject) => {
     rejectFn = reject;
     worker.onmessage = (e: MessageEvent<RenderResponse>) => {
       const msg = e.data;
       if (msg.type === 'progress') onProgress(msg.done, msg.total, msg.stage);
       else if (msg.type === 'result') {
         worker.terminate();
-        resolve({ blob: new Blob([msg.buffer], { type: msg.mimeType }), durationSec: msg.durationSec });
+        resolve({ blob: new Blob([msg.buffer], { type: msg.mimeType }), durationSec: msg.durationSec, audioCodec: msg.audioCodec });
       } else if (msg.type === 'error') {
         worker.terminate();
         reject(new Error(msg.message));
@@ -38,8 +40,8 @@ export function renderReel(
 
   const files: Record<string, File> = {};
   for (const c of clips) files[c.photoId] = photos.find((p) => p.id === c.photoId)!.file;
-  const req: RenderRequest = { type: 'render', clips, files, settings };
-  worker.postMessage(req);
+  const req: RenderRequest = { type: 'render', clips, files, settings, audio };
+  worker.postMessage(req, audio ? [audio.left.buffer, audio.right.buffer] : []);
 
   return {
     promise,

@@ -10,6 +10,8 @@ import {
 } from './analysis';
 import { importPhotos } from './import/importer';
 import { sortByTime } from './import/sort';
+import { excerpt, loadSong, type Song } from './audio/song';
+import { maxPhotosForMusic, planMusicTimeline, type SongStart } from './render/musicTimeline';
 import { renderReel, type RenderJob } from './render/renderer';
 import { buildTimeline, timelineDuration } from './render/timeline';
 import { selectPhotos } from './selection';
@@ -43,6 +45,14 @@ const el = {
   resultMeta: $('result-meta'),
   download: $<HTMLAnchorElement>('download'),
   share: $<HTMLButtonElement>('share'),
+  musicSection: $('music-section'),
+  audioInput: $<HTMLInputElement>('audio-input'),
+  musicPick: $<HTMLLabelElement>('music-pick'),
+  musicStatus: $('music-status'),
+  musicControls: $('music-controls'),
+  musicInFile: $<HTMLInputElement>('music-in-file'),
+  musicRemove: $<HTMLButtonElement>('music-remove'),
+  resultNote: $('result-note'),
 };
 
 let photos: Photo[] = [];
@@ -51,6 +61,8 @@ let overrides: Overrides = emptyOverrides();
 let job: RenderJob | null = null;
 let resultUrl: string | null = null;
 let resultFile: File | null = null;
+let song: Song | null = null;
+let songStart: SongStart = 'best';
 
 // ---- Build stamp (confirms which version is live) ------------------------------
 
@@ -153,14 +165,24 @@ interface Plan {
   picks: Photo[];
   clips: Clip[];
   droppedForLength: number;
+  /** Song time at reel t = 0 when cutting to music. */
+  audioStart: number | null;
 }
 
 function currentPlan(): Plan {
-  if (!analysis) return { picks: [], clips: [], droppedForLength: 0 };
+  if (!analysis) return { picks: [], clips: [], droppedForLength: 0, audioStart: null };
   const byId = new Map(photos.map((p) => [p.id, p]));
   const candidates = candidateIds(analysis, overrides).map((id) => byId.get(id)!);
-  const { picks, droppedForLength } = selectPhotos(candidates, settings);
-  return { picks, clips: buildTimeline(picks.map((p) => p.id), settings), droppedForLength };
+  const max = song
+    ? maxPhotosForMusic(song.beats, settings)
+    : Math.floor(settings.maxSeconds / settings.secondsPerPhoto);
+  const { picks, droppedForLength } = selectPhotos(candidates, max);
+  const ids = picks.map((p) => p.id);
+  if (song && ids.length) {
+    const m = planMusicTimeline(ids, song.beats, settings, songStart);
+    return { picks, clips: m.clips, droppedForLength, audioStart: m.audioStart };
+  }
+  return { picks, clips: buildTimeline(ids, settings), droppedForLength, audioStart: null };
 }
 
 // ---- Grid ----------------------------------------------------------------------
@@ -197,6 +219,7 @@ function renderGrid() {
   const has = photos.length > 0 && analysis !== null;
   el.orderSection.hidden = !has;
   el.makeSection.hidden = !has;
+  el.musicSection.hidden = !has;
   if (!has) return el.grid.replaceChildren();
   const a = analysis!;
 
@@ -210,14 +233,13 @@ function renderGrid() {
   const parts = [
     `${photos.length} photos → ${a.bursts.length} moments`,
     count('rejected') ? `${count('rejected')} set aside for quality` : '',
-    `${plan.picks.length} in the reel · ${timecode(duration)}`,
+    `${plan.picks.length} in the reel · ${timecode(duration)}${song ? ` cut to ${Math.round(song.beats.bpm)} BPM` : ''}`,
   ].filter(Boolean);
   let summary = parts.join(' · ') + '.';
   if (plan.droppedForLength > 0) {
     summary += ` ${plan.droppedForLength} more left out to stay under ${settings.maxSeconds}s, spread evenly across the trip.`;
-  } else if (duration < settings.minSeconds && plan.picks.length) {
-    const need = Math.ceil(settings.minSeconds / settings.secondsPerPhoto) - plan.picks.length;
-    summary += ` Add ${need} more for a ${settings.minSeconds}s reel.`;
+  } else if (duration < settings.minSeconds - 0.05 && plan.picks.length) {
+    summary += ` Add a few more photos for a ${settings.minSeconds}s reel.`;
   }
   const noExif = photos.filter((p) => p.timeSource === 'file').length;
   if (noExif) summary += ` ${noExif} had no capture date, so their file date was used.`;
@@ -282,6 +304,50 @@ function tile(p: Photo, state: ReturnType<typeof tileState>, start: number | und
   return btn;
 }
 
+// ---- Music -------------------------------------------------------------------
+
+el.audioInput.addEventListener('change', async () => {
+  const file = el.audioInput.files?.[0];
+  el.audioInput.value = '';
+  if (!file) return;
+  el.musicPick.classList.add('is-busy');
+  el.musicStatus.textContent = `Finding the beat in ${file.name}…`;
+  const t0 = performance.now();
+  try {
+    song = await loadSong(file);
+    const secs = ((performance.now() - t0) / 1000).toFixed(1);
+    el.musicStatus.textContent = `${song.name} · ${Math.round(song.beats.bpm)} BPM · ${timecode(song.duration)} · analysed in ${secs}s. Cuts land on the beat.`;
+    el.musicControls.hidden = false;
+    el.musicPick.querySelector('span')!.textContent = 'Change song';
+  } catch (err) {
+    song = null;
+    el.musicStatus.textContent = (err as Error).message;
+    el.musicControls.hidden = true;
+  } finally {
+    el.musicPick.classList.remove('is-busy');
+  }
+  clearResult();
+  renderGrid();
+});
+
+document.querySelectorAll<HTMLInputElement>('input[name="song-start"]').forEach((r) =>
+  r.addEventListener('change', () => {
+    if (!r.checked) return;
+    songStart = r.value as SongStart;
+    clearResult();
+    renderGrid();
+  }),
+);
+el.musicInFile.addEventListener('change', clearResult);
+el.musicRemove.addEventListener('click', () => {
+  song = null;
+  el.musicControls.hidden = true;
+  el.musicStatus.textContent = 'Optional. Cuts land on the beat. The song never leaves this device.';
+  el.musicPick.querySelector('span')!.textContent = 'Choose a song';
+  clearResult();
+  renderGrid();
+});
+
 // ---- Render ------------------------------------------------------------------
 
 function clearResult() {
@@ -294,9 +360,11 @@ function clearResult() {
 }
 
 el.make.addEventListener('click', async () => {
-  const { picks, clips } = currentPlan();
+  const { picks, clips, audioStart } = currentPlan();
   if (!picks.length) return;
   clearResult();
+  const withAudio = song !== null && audioStart !== null && el.musicInFile.checked;
+  const audio = withAudio ? excerpt(song!, audioStart!, timelineDuration(clips)) : undefined;
 
   el.make.disabled = true;
   el.cancel.hidden = false;
@@ -309,10 +377,10 @@ el.make.addEventListener('click', async () => {
     const pct = total ? (done / total) * 100 : 0;
     el.progressFill.style.width = `${pct.toFixed(1)}%`;
     el.progressLabel.textContent = `${stage} · frame ${done} of ${total}`;
-  });
+  }, audio);
 
   try {
-    const { blob, durationSec } = await job.promise;
+    const { blob, durationSec, audioCodec } = await job.promise;
     const secs = ((performance.now() - t0) / 1000).toFixed(1);
     resultFile = new File([blob], `vacation-reel-${new Date().toISOString().slice(0, 10)}.mp4`, {
       type: 'video/mp4',
@@ -321,7 +389,13 @@ el.make.addEventListener('click', async () => {
     el.video.src = resultUrl;
     el.download.href = resultUrl;
     el.download.download = resultFile.name;
-    el.resultMeta.textContent = `${timecode(durationSec)} · ${picks.length} photos · ${megabytes(blob.size)} · made in ${secs}s`;
+    el.resultMeta.textContent = `${timecode(durationSec)} · ${picks.length} photos · ${audioCodec ? 'with music' : 'silent'} · ${megabytes(blob.size)} · made in ${secs}s`;
+    el.video.muted = !audioCodec;
+    el.resultNote.textContent = audioCodec
+      ? 'The song is in the file. If Instagram mutes it for copyright, re-export silent and pick the song in Instagram instead.'
+      : song
+        ? `Silent, cut to the beat of ${song.name}. When posting, pick the same song in Instagram's music library and start it at ${timecode(audioStart ?? 0)}.`
+        : "No music. Add a track from Instagram's library when you post.";
     el.share.hidden = !(navigator.canShare && navigator.canShare({ files: [resultFile] }));
     el.result.hidden = false;
     el.progress.hidden = true;

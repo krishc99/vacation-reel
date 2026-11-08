@@ -1,6 +1,8 @@
 // Shared types used across import / selection / render modules and the workers.
 import type { DHash } from './analysis/dhash';
 import type { QualityStats } from './analysis/quality';
+import type { BeatAnalysis } from './audio/beats';
+import type { ReelAudio } from './audio/song';
 
 /** One imported photo, after EXIF read and thumbnail generation. */
 export interface Photo {
@@ -86,9 +88,14 @@ export type RenderRequest = {
   clips: Clip[];
   files: Record<string, File>;
   settings: ReelSettings;
+  /** Song excerpt aligned to t = 0; absent = silent video. */
+  audio?: ReelAudio;
 };
+
+export type AudioAnalysisRequest = { mono: Float32Array; sampleRate: number };
+export type AudioAnalysisResponse = { type: 'result'; analysis: BeatAnalysis } | { type: 'error'; message: string };
 
 export type RenderResponse =
   | { type: 'progress'; done: number; total: number; stage: string }
-  | { type: 'result'; buffer: ArrayBuffer; mimeType: string; durationSec: number }
+  | { type: 'result'; buffer: ArrayBuffer; mimeType: string; durationSec: number; audioCodec: string | null }
   | { type: 'error'; message: string };

@@ -31,10 +31,10 @@ async function loadFramed(file: File, w: number, h: number): Promise<ImageBitmap
 
 self.onmessage = async (e: MessageEvent<RenderRequest>) => {
   if (e.data.type !== 'render') return;
-  const { clips, files, settings: s } = e.data;
+  const { clips, files, settings: s, audio } = e.data;
   let enc: FrameEncoder | null = null;
   try {
-    enc = await createEncoder(s);
+    enc = await createEncoder(s, audio);
     const ctx = enc.canvas.getContext('2d', { alpha: false })!;
     const frameDur = 1 / s.fps;
     const totalFrames = Math.round(timelineDuration(clips) * s.fps);
@@ -60,7 +60,7 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
 
     post({ type: 'progress', done: totalFrames, total: totalFrames, stage: 'Finishing' });
     const buffer = await enc.finish();
-    post({ type: 'result', buffer, mimeType: 'video/mp4', durationSec: totalFrames / s.fps }, [buffer]);
+    post({ type: 'result', buffer, mimeType: 'video/mp4', durationSec: totalFrames / s.fps, audioCodec: enc.audioCodec }, [buffer]);
   } catch (err) {
     await enc?.cancel().catch(() => {});
     post({ type: 'error', message: err instanceof Error ? err.message : String(err) });

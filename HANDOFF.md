@@ -1,4 +1,4 @@
-# HANDOFF → Milestone 3 · vacation-reel · updated 2026-11-08
+# HANDOFF → Milestone 4 · vacation-reel · updated 2026-11-08
 Audience: AI agent. Terse by design. Original plan = final; don't reopen decisions unless user asks.
 
 ## 0. Project
@@ -25,7 +25,7 @@ User: Krish (GH krishc99). Wants: working result after each milestone, confirm b
 | exifr | 7.1.3 | MIT | + own HEIC fallback (see §6) |
 | libheif-js | 1.23.5 | LGPL-3.0 | replaces plan's `heic2any` (unmaintained, DOM-only, bundles old libheif = LGPL anyway). Lazy chunk, unmodified. README has notice. |
 | vite 8.3.4 · typescript 5.9.3 · vitest 4.1.12 | | MIT/Apache | dev |
-Scripts: `dev`, `test` (vitest run), `build` (= tsc + vitest + vite build), `preview`.
+Scripts: `dev`, `test` (vitest run), `build` (= tsc + vitest + vite build), `preview`. +dep @mediabunny/aac-encoder 1.61.6 (MPL-2.0, wasm FFmpeg AAC = LGPL; lazy).
 
 ## 4. Code map
 ```
@@ -65,18 +65,28 @@ NOT verified: real iPhone HEIC (exifr fallback tested only on pillow-heif files)
 - libheif chunk duplicated per worker bundle (2×2MB), downloaded only if a HEIC appears.
 - Synthetic test images have zero-noise flats → noise ranks odd; real photos fine.
 
-## 7. Milestone 3 scope — "Music, beat cuts, silent export"
-- User picks a local audio file (mp3/m4a/wav). Decode via Web Audio `decodeAudioData` (main thread OK) → mono Float32 → worker.
-- Beats: `essentia.js` (verify version + license: AGPL? → if AGPL, DON'T; use custom onset detector) or custom: spectral-flux onset envelope → tempo via autocorrelation (60–180 BPM) → beat grid (DP beat tracking à la Ellis) → downbeats (every 4th, phase by onset strength).
-- Cuts: 0.5–1.5s per photo, snap to beats/downbeats; opener + finale longer; total 15–30s; pick audio window w/ strongest energy (or from start). Timeline replaces `buildTimeline` fixed 1.5s → `buildBeatTimeline(photos, beats, settings)`.
-- Export: (a) with music: add AAC audio track via mediabunny (AudioBufferSource / AudioSampleSource, codec 'aac'; check `canEncodeAudio('aac')` — Firefox may lack AAC encode → fallback opus? MP4+opus IG compat uncertain → if no AAC, offer silent only). (b) Silent at same timing (default path; user adds IG library music). No bundled copyrighted music.
-- Transitions: hard cuts on strong beats; crossfades optional (Ken Burns = M8).
-- UI: audio picker, waveform/beat markers optional, toggle "Include music in file".
-- Done when: cuts land on beats (verify: cut frame times vs beat times ±1 frame), audio in sync, ffprobe shows h264+aac, silent export same cut times.
+## 7. Milestone 3 — DONE (music, beat cuts, silent export)
+```
+src/audio/fft.ts            radix-2 FFT
+src/audio/beats.ts          analyzeBeats(mono 24k): log-mag STFT (1024/256) spectral flux → detrend/normalize → tempo = autocorr × log-gauss prior @120 BPM (0.9 oct) → Ellis DP (tightness 100) → trim quiet ends → downbeat phase = max kick-band (<150 Hz) flux of 4 phases. ONSET_LAG 11 ms calibrated. bpm = whole-track mean interval. beatEnergy per beat (RMS)
+src/audio/song.ts           loadSong: OfflineAudioContext(48k) decode → stereo kept; mono 24k → audio.worker. excerpt(): +AAC_PRIMING (1024/48k) shift (Mediabunny writes no elst; measured fix), 20 ms fade-in, 1 s fade-out
+src/render/musicTimeline.ts k beats/photo from multiples with cut 0.5–1.5 s; pick to fit ≤30 s, prefer ≥15 s, then closest to 0.9 s. Opener/finale = 2k. Start = downbeat; 'best' = max mean beatEnergy window, 'start' = first downbeat. maxPhotosForMusic caps selection (≤25). Beats extrapolated if song too short
+src/render/encoder.ts       optional AAC track (AudioSampleSource, 192 kbps, one f32-planar AudioSample, add() not awaited until finish → no interleave deadlock). Native AAC else lazy @mediabunny/aac-encoder
+src/selection/index.ts      selectPhotos(photos, maxCount) — cap now from timeline (fixed: 20; music: per tempo)
+UI: Music step (choose song, Best part / From the start, "Put the song in the video file", remove). Silent export note tells user where to start the song in IG.
+```
+Verified: tempo ±0.5% & >90% beats within 35 ms on synthetic drums 87/100/124/140 BPM; planner: all cuts on detected beats, start on downbeat, 15–30 s for 70–174 BPM. E2E (headless Chromium = wasm AAC path; Pixel emu): MP4 h264 + aac 48k, A/V: audio onset − cut median ~10 ms, max 17 ms (frame quantization) for MP3 & WAV; "best part" lands in loud section. Not verified: native AAC on real phones (priming may be 2112 samples on Apple → ~23 ms late, acceptable), real songs w/ tempo changes/swing, half/double-tempo errors.
+
+Also in this session (post-M2 user feedback "fewer people, more food/landscapes"): gate now only sets aside CLEARLY unusable photos (sharp <0.15, mean <0.07 or clip >0.75, bright >0.93 or clip >0.6) and only if a clean keeper of the SAME SCENE (dHash ≤22) exists in the moment. Bursts tightened: fast 2 s/≤14, window 15 s/≤10. Real fix for people = M4 faces (people-aware gate/selection).
+
+## 7b. Milestone 4 scope — CLIP + face identity
+- Plan: CLIP labels+embeddings (transformers.js, small quantized, lazy, cache), face/blendshapes/pose (MediaPipe Face/Pose Landmarker), identity embeddings (permissive model or face-api.js; NOT InsightFace) → cluster into people (recurring = friends, one-off small = strangers). Tune in Python, port.
+- PRIORITY from user: reel must favour people. Use face count/size immediately: gate never replaces a face photo with a no-face photo; subjectSharpness(regions=face boxes); selection cap prefers photos with friends until M7 scoring.
+- Check MediaPipe tasks-vision in MODULE workers (uses importScripts? may need classic worker or main thread). Model files: self-host in /public (license Apache-2.0) to avoid third-party fetch; verify size.
 
 ## 8. Test recipe
 - Synthetic photos: PIL random ellipses/lines scenes (`scene(seed,label)`), EXIF via `Image.Exif()[0x8769]={0x9003:'YYYY:MM:DD HH:MM:SS'}`; HEIC via `pillow_heif` (pip, `--break-system-packages`); blur = GaussianBlur(25–30).
-- Synthetic music: ffmpeg `sine`/`aevalsrc` click track at known BPM → assert detected tempo.
+- Synthetic music: numpy drum loop (kick 1&3, snare 2&4, hats 8ths; quiet intro, loud 40–70 s) → WAV + MP3 (ffmpeg libmp3lame). Sync check: ffmpeg scene-detect cut pts vs transient onsets in exported audio. Audio input: `setInputFiles('#audio-input', path)`; wait `#music-status` contains 'BPM'; `#song-start`, `#music-in-file`.
 - `npx vite preview --port 4173 &` → Playwright (preinstalled `require('playwright')`). Files: `setInputFiles('#file-input', paths)`; wait `#order-section:not([hidden])`; tiles are `button.tile[aria-label^="<name>"]`; `#make`; wait `#result:not([hidden])`; `download` event from `#download`. Radio: `page.check('#shape-horizontal')`.
 - ffprobe streams/frames/duration. Sandbox blocks fonts.googleapis.com (fallback fonts in screenshots; fine).
 
