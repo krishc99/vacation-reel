@@ -1,5 +1,6 @@
 // Shared types used across import / selection / render modules and the workers.
 import type { DHash } from './analysis/dhash';
+import type { People } from './analysis/people';
 import type { QualityStats } from './analysis/quality';
 import type { BeatAnalysis } from './audio/beats';
 import type { ReelAudio } from './audio/song';
@@ -25,6 +26,8 @@ export interface Photo {
   master: Blob;
   stats: QualityStats;
   dhash: DHash;
+  /** Faces and bodies (filled in after import by the vision worker; absent until then). */
+  people?: People;
 }
 
 export interface ReelSettings {
@@ -91,6 +94,8 @@ export type RenderRequest = {
   clips: Clip[];
   /** Render copies (Photo.master), keyed by photo id. */
   images: Record<string, Blob>;
+  /** People to keep in frame (normalized boxes), keyed by photo id. */
+  subjects: Record<string, import('./render/crop').Subject[]>;
   settings: ReelSettings;
   /** Song excerpt aligned to t = 0; absent = silent video. */
   audio?: ReelAudio;
@@ -103,3 +108,13 @@ export type RenderResponse =
   | { type: 'progress'; done: number; total: number; stage: string }
   | { type: 'result'; buffer: ArrayBuffer; mimeType: string; durationSec: number; audioCodec: string | null }
   | { type: 'error'; message: string };
+
+export type VisionRequest =
+  | { type: 'init'; base: string }
+  | { type: 'photo'; id: string; detail: Blob; master: Blob; noise: number };
+
+export type VisionResponse =
+  | { type: 'ready' }
+  | { type: 'fatal'; message: string }
+  | { type: 'people'; id: string; people: People }
+  | { type: 'failed'; id: string; message: string };

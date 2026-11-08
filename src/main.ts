@@ -8,6 +8,8 @@ import {
   type Overrides,
   type Reason,
 } from './analysis';
+import { subjectBoxes } from './analysis/people';
+import { findPeople, type VisionJob } from './analysis/vision';
 import { importPhotos } from './import/importer';
 import { sortByTime } from './import/sort';
 import { excerpt, loadSong, type Song } from './audio/song';
@@ -15,7 +17,7 @@ import { maxPhotosForMusic, planMusicTimeline, songParts, type SongStart } from 
 import { renderReel, type RenderJob } from './render/renderer';
 import { frameFor } from './render/crop';
 import { buildTimeline, timelineDuration } from './render/timeline';
-import { selectPhotos } from './selection';
+import { selectPhotos, slotScore } from './selection';
 import { DEFAULT_SETTINGS, SHAPE_SIZE, type Clip, type Photo, type ReelSettings, type Shape } from './types';
 import { megabytes, shotTime, shotTimeFull, timecode } from './ui/format';
 
@@ -29,6 +31,7 @@ const el = {
   drop: $<HTMLLabelElement>('drop'),
   fileInput: $<HTMLInputElement>('file-input'),
   importStatus: $('import-status'),
+  peopleStatus: $('people-status'),
   skipped: $<HTMLUListElement>('skipped'),
   orderSection: $('order-section'),
   orderSummary: $('order-summary'),
@@ -105,6 +108,7 @@ async function addFiles(list: FileList | File[]) {
     showSkipped(skipped);
     clearResult();
     renderGrid();
+    startPeople();
   } catch (err) {
     el.importStatus.textContent = `Could not read photos: ${(err as Error).message}`;
   } finally {
@@ -141,7 +145,52 @@ el.drop.addEventListener('drop', (e) => {
   if (e.dataTransfer?.files) addFiles(e.dataTransfer.files);
 });
 
+// ---- People (faces + bodies, M4a) --------------------------------------------
+
+let visionJob: VisionJob | null = null;
+let refreshTimer = 0;
+
+/** Re-run analysis as people results stream in (batched so the grid doesn't thrash). */
+function scheduleRefresh() {
+  clearTimeout(refreshTimer);
+  refreshTimer = window.setTimeout(() => {
+    if (!photos.length) return;
+    analysis = analyzeAlbum(photos);
+    renderGrid();
+  }, 400);
+}
+
+function startPeople() {
+  visionJob?.cancel();
+  const byId = new Map(photos.map((p) => [p.id, p]));
+  const t0 = performance.now();
+  el.peopleStatus.textContent = 'Getting the people finder ready…';
+  const job = findPeople(
+    photos,
+    (id, people) => {
+      const p = byId.get(id);
+      if (p) p.people = people;
+      scheduleRefresh();
+    },
+    (done, total) => (el.peopleStatus.textContent = `Finding people… ${done} of ${total}`),
+  );
+  visionJob = job;
+  void job.done.then(({ failed, error }) => {
+    if (visionJob !== job) return;
+    visionJob = null;
+    const withPeople = photos.filter((p) => (p.people?.count ?? 0) > 0).length;
+    const secs = ((performance.now() - t0) / 1000).toFixed(1);
+    el.peopleStatus.textContent = error
+      ? `People finder unavailable (${error}). Photos are picked without it.`
+      : `People in ${withPeople} of ${photos.length} photos (${secs}s).` + (failed ? ` ${failed} could not be checked.` : '');
+    scheduleRefresh();
+  });
+}
+
 el.clear.addEventListener('click', () => {
+  visionJob?.cancel();
+  visionJob = null;
+  el.peopleStatus.textContent = '';
   photos.forEach((p) => URL.revokeObjectURL(p.thumbUrl));
   photos = [];
   analysis = null;
@@ -176,22 +225,25 @@ interface Plan {
   audioStart: number | null;
   /** Song time of the chorus the reel builds up to. */
   highlight: number | null;
+  /** Reel ends exactly where the chorus ends. */
+  coversSection: boolean;
 }
 
 function currentPlan(): Plan {
-  if (!analysis) return { picks: [], clips: [], droppedForLength: 0, audioStart: null, highlight: null };
+  if (!analysis) return { picks: [], clips: [], droppedForLength: 0, audioStart: null, highlight: null, coversSection: false };
   const byId = new Map(photos.map((p) => [p.id, p]));
   const candidates = candidateIds(analysis, overrides).map((id) => byId.get(id)!);
   const max = song
-    ? maxPhotosForMusic(song.beats, settings, songStart)
+    ? maxPhotosForMusic(song.beats, settings, songStart, songPart)
     : Math.floor(settings.maxSeconds / settings.secondsPerPhoto);
-  const { picks, droppedForLength } = selectPhotos(candidates, max);
+  const a = analysis;
+  const { picks, droppedForLength } = selectPhotos(candidates, max, (p) => slotScore(p, a.verdicts.get(p.id)?.q ?? 0));
   const ids = picks.map((p) => p.id);
   if (song && ids.length) {
     const m = planMusicTimeline(ids, song.beats, settings, songStart, songPart);
-    return { picks, clips: m.clips, droppedForLength, audioStart: m.audioStart, highlight: m.highlight };
+    return { picks, clips: m.clips, droppedForLength, audioStart: m.audioStart, highlight: m.highlight, coversSection: m.coversSection };
   }
-  return { picks, clips: buildTimeline(ids, settings), droppedForLength, audioStart: null, highlight: null };
+  return { picks, clips: buildTimeline(ids, settings), droppedForLength, audioStart: null, highlight: null, coversSection: false };
 }
 
 // ---- Grid ----------------------------------------------------------------------
@@ -283,9 +335,18 @@ function tile(p: Photo, state: ReturnType<typeof tileState>, start: number | und
   const cls = state === 'keeper' ? (used ? 'is-used' : 'is-capped') : `is-${state}`;
   btn.className = `tile ${cls}`;
   btn.addEventListener('click', () => onTileTap(p.id));
+  if (p.people) {
+    btn.dataset.people = String(p.people.count);
+    btn.dataset.eyesOpen = String(p.people.eyesOpen);
+    btn.dataset.faces = String(p.people.faces.length);
+    btn.dataset.bodies = String(p.people.bodies.length);
+    if (p.people.faceSharpness !== null) btn.dataset.faceSharp = p.people.faceSharpness.toFixed(3);
+  }
+  btn.dataset.sharp = p.stats.sharpness.toFixed(3);
 
   // Preview the framing the export will use (cover crop, or whole photo on a blurred fill).
-  const fit = frameFor(p.width, p.height, settings.width, settings.height).mode === 'fit';
+  const framing = frameFor(p.width, p.height, settings.width, settings.height, subjectBoxes(p.people));
+  const fit = framing.mode === 'fit';
   const frame = document.createElement('span');
   frame.className = fit ? 'tile__frame is-fit' : 'tile__frame';
   if (fit) {
@@ -297,6 +358,13 @@ function tile(p: Photo, state: ReturnType<typeof tileState>, start: number | und
   }
   const img = document.createElement('img');
   img.className = 'tile__img';
+  if (framing.mode === 'cover') {
+    // Same crop position as the export (shifted toward the people).
+    const c = framing.crop;
+    const px = p.width > c.sw + 0.5 ? (c.sx / (p.width - c.sw)) * 100 : 50;
+    const py = p.height > c.sh + 0.5 ? (c.sy / (p.height - c.sh)) * 100 : 50;
+    img.style.objectPosition = `${px.toFixed(1)}% ${py.toFixed(1)}%`;
+  }
   img.src = p.thumbUrl;
   img.alt = p.name;
   img.loading = 'lazy';
@@ -334,7 +402,7 @@ function updateSongParts(plan: Plan) {
   const total = songStart === 'best' ? songParts(song.beats, plan.picks.length, settings).length : 0;
   const at =
     plan.highlight !== null && plan.highlight > plan.audioStart
-      ? `chorus ${timecode(plan.highlight)} · lead-in from ${timecode(plan.audioStart)}`
+      ? `chorus ${timecode(plan.highlight)} · lead-in from ${timecode(plan.audioStart)} · ${plan.coversSection ? 'ends with the chorus' : 'ends on a phrase'}`
       : `starts ${timecode(plan.audioStart)}`;
   el.partLabel.textContent = songStart === 'best' && total ? `Suggestion ${Math.min(songPart, total - 1) + 1} of ${total} · ${at}` : `From the top · ${at}`;
   el.partPrev.hidden = el.partNext.hidden = songStart !== 'best';
