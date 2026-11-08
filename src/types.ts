@@ -9,7 +9,7 @@ import type { ReelAudio } from './audio/song';
 /** One imported photo, after EXIF read and thumbnail generation. */
 export interface Photo {
   id: string;
-  file: File;
+  /** The picked file is not kept: the copies below are all the app needs after import (saves memory). */
   name: string;
   /** Capture time in ms since epoch. EXIF DateTimeOriginal if present, else file lastModified. */
   takenAt: number;

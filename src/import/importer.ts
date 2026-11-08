@@ -18,7 +18,8 @@ let nextId = 0;
 /** Phones: one worker (one full-res decode in memory at a time). Desktops: two. */
 function poolSize(): number {
   const touch = navigator.maxTouchPoints > 0 && /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
-  if (touch) return 1;
+  // Phones: one at a time, unless the browser reports ≥ 6 GB RAM (Chrome's deviceMemory).
+  if (touch) return ((navigator as { deviceMemory?: number }).deviceMemory ?? 0) >= 6 ? 2 : 1;
   return Math.max(1, Math.min(2, (navigator.hardwareConcurrency || 2) - 1));
 }
 
@@ -121,14 +122,44 @@ async function runOnMainThread(queue: Item[], onResult: (r: Result) => void) {
 }
 
 /** Decode + EXIF + stats + dHash + thumbnails; returns photos sorted by capture time. */
-export async function importPhotos(
+/**
+ * Copy every picked file right away. Android (and cloud-backed pickers) only let
+ * a page read picked files for a limited time; analysis takes a few seconds per
+ * photo, so files at the back of the queue used to become unreadable
+ * (NotReadableError). Reading bytes is fast; the copies are ordinary Blobs the
+ * browser can keep on disk.
+ */
+async function snapshot(
   files: File[],
   onProgress: (done: number, total: number) => void,
+): Promise<{ copies: File[]; unreadable: string[] }> {
+  const copies: File[] = [];
+  const unreadable: string[] = [];
+  for (const f of files) {
+    try {
+      const bytes = await f.arrayBuffer();
+      copies.push(new File([bytes], f.name, { type: f.type, lastModified: f.lastModified }));
+    } catch {
+      unreadable.push(f.name);
+    }
+    onProgress(copies.length + unreadable.length, files.length);
+  }
+  return { copies, unreadable };
+}
+
+export async function importPhotos(
+  picked: File[],
+  onProgress: (done: number, total: number) => void,
+  onCopying: (done: number, total: number) => void = () => {},
 ): Promise<ImportResult> {
+  const { copies: files, unreadable } = await snapshot(picked, onCopying);
   const queue: Item[] = files.map((file) => ({ id: `p${nextId++}`, file, attempts: 0 }));
   const byId = new Map(queue.map((i) => [i.id, i.file]));
   const photos: Photo[] = [];
-  const skipped: ImportResult['skipped'] = [];
+  const skipped: ImportResult['skipped'] = unreadable.map((name) => ({
+    name,
+    reason: "Couldn't read this file from your device. Try picking it again; if it's an online-only cloud copy, download it first.",
+  }));
   const seen = new Set<string>();
   let fallbackReason: string | null = null;
 
@@ -139,7 +170,6 @@ export async function importPhotos(
       const file = byId.get(msg.id)!;
       photos.push({
         id: msg.id,
-        file,
         name: file.name,
         takenAt: msg.takenAt,
         timeSource: msg.timeSource,

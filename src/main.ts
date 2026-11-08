@@ -101,9 +101,15 @@ async function addFiles(list: FileList | File[]) {
   el.importStatus.textContent = `Reading 0 of ${files.length}…`;
   const t0 = performance.now();
   try {
-    const { photos: added, skipped, fallbackReason } = await importPhotos(files, (done, total) => {
-      el.importStatus.textContent = `Reading ${done} of ${total}…`;
-    });
+    const { photos: added, skipped, fallbackReason } = await importPhotos(
+      files,
+      (done, total) => {
+        el.importStatus.textContent = `Reading ${done} of ${total}…`;
+      },
+      (done, total) => {
+        el.importStatus.textContent = `Copying ${done} of ${total}…`;
+      },
+    );
     photos = sortByTime([...photos, ...added]);
     analysis = analyzeAlbum(photos);
     // Burst ids are positional, so keeper picks don't survive a re-analysis.
@@ -115,8 +121,9 @@ async function addFiles(list: FileList | File[]) {
     showSkipped(skipped);
     clearResult();
     renderGrid();
-    startPeople();
-    startScenes();
+    // One heavy model download at a time (phones choke on both at once):
+    // the scene finder starts when the people finder is done.
+    startPeople().finally(startScenes);
   } catch (err) {
     el.importStatus.textContent = `Could not read photos: ${(err as Error).message}`;
   } finally {
@@ -171,7 +178,7 @@ function scheduleRefresh() {
   }, 400);
 }
 
-function startPeople() {
+function startPeople(): Promise<void> {
   visionJob?.cancel();
   const byId = new Map(photos.map((p) => [p.id, p]));
   const t0 = performance.now();
@@ -186,7 +193,7 @@ function startPeople() {
     (done, total) => (el.peopleStatus.textContent = `Finding people… ${done} of ${total}`),
   );
   visionJob = job;
-  void job.done.then(({ failed, error, warnings }) => {
+  return job.done.then(({ failed, error, warnings }) => {
     if (visionJob !== job) return;
     visionJob = null;
     const withPeople = photos.filter((p) => (p.people?.count ?? 0) > 0).length;

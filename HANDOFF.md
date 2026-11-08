@@ -116,6 +116,12 @@ selection    others = fillOthers: non-food spread first; food ≤ floor(0.2·slo
 Verified (samples): coffee→food .85, moto→vehicle .92, grass→scenery, rocket→landmark, cat→animal, receipt→junk (set aside), chat screenshot→caught by file clues (CLIP said room). People photos' CLIP labels unreliable (astronaut→landmark) — people decisions use faces, not CLIP. 50-photo album: 10 people + 8 scenery + 2 food picked, no vehicles/animals. 54 unit tests.
 Also: status line now "People in X of N · F faces, I recognisable → K people you appear with, S one-off" (user reported "only 2 people"; ask which number is low). Different-person SFace cosine max 0.34 on samples → do NOT lower 0.363. NotReadableError (cloud placeholder / moved file) → retry once after 500 ms, then friendly "make it available offline" message.
 
+## 7d+. Phone robustness (after M4b, user's Android run)
+- Import SNAPSHOTS all picked files first (file.arrayBuffer → new File) before analysis: Android revoked access mid-import (54 s for 24 photos) → NotReadableError on late files. Photo.file removed (copies only held during import; masters/details kept).
+- Model/engine downloads: fetchAsset.ts fetchBytes (3 tries, backoff) → MediaPipe modelAssetBuffer + wasm via blob: URL; ORT env.wasm.wasmBinary + session from bytes. User saw "face_landmarker.task: HTTP 200 … Failed to fetch" (download broke mid-way). Tested by aborting the first request of every big file: all recovered.
+- Scene finder starts only after the people finder finishes (one heavy download/compile at a time on phones).
+- Phone import pool: 2 if navigator.deviceMemory ≥ 6, else 1. Master JPEG q 0.88.
+
 ## 7e. Milestone 5 scope — classic best-photo picking (plan)
 Face checks per burst: eyes open (both eyeBlink < 0.4, heaviest), yaw < 25°, pitch not down, smile bonus, sharp face crop, box not touching edge. Winner: most passing faces → best worst-face → avg smile → sharpness. Expected count = max faces in burst; missing face = fail. Intentional vs accidental expressions (shared/held = intentional). A burst can yield several keepers (fun modes M6).
 

@@ -63,8 +63,7 @@ function unreadable(err: unknown): boolean {
   const e = err as { name?: string; message?: string };
   return e?.name === 'NotReadableError' || /could not be read/i.test(e?.message ?? '');
 }
-const UNREADABLE_HELP =
-  "Couldn't read this file. If it's in iCloud, OneDrive or Google Drive, make it available offline (download it to this device), then add it again.";
+const UNREADABLE_HELP = "Couldn't read this file from your device. Try picking it again; if it's an online-only cloud copy, download it first.";
 
 export async function processPhoto(id: string, file: File): Promise<PhotoMsg | SkippedMsg> {
   let full: ImageBitmap;
@@ -94,7 +93,7 @@ export async function processPhoto(id: string, file: File): Promise<PhotoMsg | S
       readExif(file, isHeif),
       small.canvas.convertToBlob({ type: 'image/jpeg', quality: 0.8 }),
       detail.canvas.convertToBlob({ type: 'image/jpeg', quality: 0.85 }),
-      master.convertToBlob({ type: 'image/jpeg', quality: 0.9 }),
+      master.convertToBlob({ type: 'image/jpeg', quality: 0.88 }),
     ]);
     return {
       type: 'photo',

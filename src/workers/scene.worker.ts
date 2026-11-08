@@ -3,6 +3,7 @@
 import * as ort from 'onnxruntime-web/wasm';
 import { l2normalize } from '../analysis/align';
 import { classify } from '../analysis/scenes';
+import { fetchBytes } from './fetchAsset';
 import type { SceneRequest, SceneResponse } from '../types';
 
 declare const self: DedicatedWorkerGlobalScope;
@@ -43,8 +44,8 @@ self.onmessage = async (e: MessageEvent<SceneRequest>) => {
     const model = new URL(CLIP_MODEL, msg.base).href;
     try {
       ort.env.wasm.numThreads = 1;
-      ort.env.wasm.wasmPaths = { wasm: new URL('ort/ort-wasm-simd-threaded.wasm', msg.base).href };
-      session = await ort.InferenceSession.create(model, { executionProviders: ['wasm'], logSeverityLevel: 3 });
+      ort.env.wasm.wasmBinary = await fetchBytes(new URL('ort/ort-wasm-simd-threaded.wasm', msg.base).href);
+      session = await ort.InferenceSession.create(await fetchBytes(model), { executionProviders: ['wasm'], logSeverityLevel: 3 });
       post({ type: 'ready' });
     } catch (err) {
       let why = 'blocked or offline (no response)';

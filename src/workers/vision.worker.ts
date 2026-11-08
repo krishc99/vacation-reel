@@ -4,6 +4,7 @@
 import { FaceLandmarker, PoseLandmarker, type NormalizedLandmark } from '@mediapipe/tasks-vision';
 import * as ort from 'onnxruntime-web/wasm';
 import { l2normalize, similarity, TEMPLATE_112, type Pt } from '../analysis/align';
+import { fetchAsBlobUrl, fetchBytes } from './fetchAsset';
 import { dedupe, headAngles, summarize, type Body, type Box, type Face } from '../analysis/people';
 import { toGray } from '../analysis/pixels';
 import { subjectSharpness } from '../analysis/quality';
@@ -61,9 +62,12 @@ async function init(base: string): Promise<string[]> {
   const warnings: string[] = [];
   // Explicit module-build paths (FilesetResolver may pick a non-existent "nosimd"
   // variant), and load the loader ourselves: it registers globalThis.ModuleFactory.
+  // The 13.5 MB engine is downloaded by us (with retries) and handed over as a
+  // local blob: URL, so a dropped connection doesn't kill the people finder.
+  const wasmUrl = new URL('mediapipe/vision_wasm_module_internal.wasm', base).href;
   const files = {
     wasmLoaderPath: new URL('mediapipe/vision_wasm_module_internal.js', base).href,
-    wasmBinaryPath: new URL('mediapipe/vision_wasm_module_internal.wasm', base).href,
+    wasmBinaryPath: await stage(wasmUrl, () => fetchAsBlobUrl(wasmUrl, 'application/wasm')),
   };
   // MediaPipe deletes globalThis.ModuleFactory after creating a task, and an ES
   // module only evaluates once, so put the factory back before each task.
@@ -71,9 +75,10 @@ async function init(base: string): Promise<string[]> {
   const g = self as unknown as { ModuleFactory?: unknown };
   g.ModuleFactory = loader.default;
   const faceModel = new URL('models/face_landmarker.task', base).href;
+  const faceBytes = await stage(faceModel, () => fetchBytes(faceModel));
   face = await stage(faceModel, () =>
     FaceLandmarker.createFromOptions(files, {
-      baseOptions: { modelAssetPath: faceModel, delegate: 'CPU' },
+      baseOptions: { modelAssetBuffer: faceBytes, delegate: 'CPU' },
       runningMode: 'IMAGE',
       numFaces: 12,
       minFaceDetectionConfidence: 0.6,
@@ -86,9 +91,10 @@ async function init(base: string): Promise<string[]> {
   const poseModel = new URL('models/pose_landmarker_lite.task', base).href;
   try {
     g.ModuleFactory = loader.default;
+    const poseBytes = await stage(poseModel, () => fetchBytes(poseModel));
     pose = await stage(poseModel, () =>
       PoseLandmarker.createFromOptions(files, {
-        baseOptions: { modelAssetPath: poseModel, delegate: 'CPU' },
+        baseOptions: { modelAssetBuffer: poseBytes, delegate: 'CPU' },
         runningMode: 'IMAGE',
         numPoses: 6,
         minPoseDetectionConfidence: 0.6,
@@ -103,9 +109,10 @@ async function init(base: string): Promise<string[]> {
   const sfaceModel = new URL('models/face_recognition_sface_2021dec_int8.onnx', base).href;
   try {
     ort.env.wasm.numThreads = 1; // no cross-origin isolation on GitHub Pages
-    ort.env.wasm.wasmPaths = { wasm: ortWasm };
+    ort.env.wasm.wasmBinary = await stage(ortWasm, () => fetchBytes(ortWasm));
+    const sfaceBytes = await stage(sfaceModel, () => fetchBytes(sfaceModel));
     sface = await stage(sfaceModel, () =>
-      ort.InferenceSession.create(sfaceModel, {
+      ort.InferenceSession.create(sfaceBytes, {
         executionProviders: ['wasm'],
         logSeverityLevel: 3, // the model's graph triggers harmless optimiser warnings
       }),
