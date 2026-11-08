@@ -1,7 +1,0 @@
-Milestone 1: upload, EXIF sort, center crop, WebCodecs MP4 export
-
-Vertical (1080x1920) or horizontal (1920x1080), 1.5s per photo, 30fps H.264.
-Decode and encode run in Web Workers. GitHub Pages deploy workflow.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01BGWLvgGxZ9tanSJHbhSYHY
