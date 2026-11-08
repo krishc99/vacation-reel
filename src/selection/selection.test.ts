@@ -19,6 +19,42 @@ describe('selectPhotos (people first)', () => {
     // Still spread across the whole trip, in order.
     expect(picks.map((p) => Number(p.id.slice(1)))).toEqual([1, 4, 7, 10, 13, 16, 19, 22, 25, 28]);
   });
+  it('people photos win even when they bunch up in one part of the trip', () => {
+    // 40 photos: food everywhere, but 8 distinct people photos all on day 2 (indices 20–27).
+    const photos = Array.from({ length: 40 }, (_, i) => photo(`p${i}`, i >= 20 && i < 28 ? 1 : 0));
+    const { picks } = selectPhotos(photos, 10, (p) => slotScore(p, 0.9));
+    const ppl = picks.filter((p) => (p.people?.count ?? 0) > 0);
+    expect(ppl).toHaveLength(8); // every people photo is in
+    expect(picks).toHaveLength(10); // the 2 leftover slots go to food/scenery, spread out
+    expect(picks.map((p) => Number(p.id.slice(1)))).toEqual([...picks.map((p) => Number(p.id.slice(1)))].sort((a, b) => a - b));
+  });
+
+  it('with more people photos than slots, no food/scenery is used', () => {
+    const photos = Array.from({ length: 60 }, (_, i) => photo(`p${i}`, i % 2));
+    const { picks } = selectPhotos(photos, 20, (p) => slotScore(p, 0.9));
+    expect(picks.every((p) => (p.people?.count ?? 0) > 0)).toBe(true);
+    // Spread over the trip: first pick early, last pick late.
+    expect(Number(picks[0].id.slice(1))).toBeLessThan(5);
+    expect(Number(picks[19].id.slice(1))).toBeGreaterThan(54);
+  });
+
+  it('every friend gets into the reel', () => {
+    // 30 people photos; friend "z" only in photo 29 (a weak photo) — would be dropped by spread.
+    const photos = Array.from({ length: 30 }, (_, i) => photo(`p${i}`, 1));
+    const friends = (p: Photo) => (p.id === 'p29' ? ['z'] : ['a']);
+    const who = { friends, known: true };
+    const score = (p: Photo) => (p.id === 'p29' ? 0 : 1) + slotScore(p, 0.5, who) * 0;
+    const { picks, friendSwaps } = selectPhotos(photos, 10, score, who);
+    expect(picks.some((p) => p.id === 'p29')).toBe(true);
+    expect(friendSwaps).toBe(1);
+  });
+
+  it('once friends are known, a photo of only background strangers is scenery', () => {
+    const who = { friends: () => [], known: true };
+    const strangers = photo('s', 3, 0.04); // three small one-off faces
+    expect(slotScore(strangers, 0.5, who)).toBe(0.5);
+  });
+
   it('a sharp landscape never beats a soft-but-usable people photo', () => {
     expect(slotScore(photo('a', 1, 0.05), 0.2)).toBeGreaterThan(slotScore(photo('b', 0), 1));
   });

@@ -1,4 +1,4 @@
-# HANDOFF → Milestone 4b · vacation-reel · updated 2026-11-08
+# HANDOFF → Milestone 4b part 2 (scenes / CLIP) · vacation-reel · updated 2026-11-08
 Audience: AI agent. Terse by design. Original plan = final; don't reopen decisions unless user asks.
 
 ## 0. Project
@@ -84,19 +84,29 @@ Also in this session (post-M2 user feedback "fewer people, more food/landscapes"
 ## 7b. Milestone 4a — DONE (people first)
 ```
 scripts/assets.mjs          predev/prebuild: copy tasks-vision wasm (module build) → public/mediapipe; download face_landmarker.task + pose_landmarker_lite.task (official GCS URLs) → public/models (skip if present). Both git-ignored. CI (Actions) has internet; sandbox doesn't → seed public/models from npm 'ptmaker-vision-models' (third-party mirror, TEST ONLY)
-src/workers/vision.worker.ts  MediaPipe in a MODULE worker: build fileset by hand (module_internal js/wasm), import the loader and set self.ModuleFactory before EACH createFromOptions (MediaPipe deletes it; ESM evaluates once). CPU delegate. FaceLandmarker numFaces 12, conf 0.6 (0.45 → false face on a bike wheel; 0.7 → misses 2/6 in group), blendshapes + matrices. PoseLandmarker lite numPoses 6, conf 0.6; body counted only with both shoulders + (both hips or head: nose/eyes/ears) + upright. Pass 1 on 640 detail; pass 2 on 3×2 (2×3) overlapping tiles of master when anyone found or aspect>1.2; dedupe by IoU/centre. faceSharpness = subjectSharpness on face tiles (overlap test)
+src/workers/vision.worker.ts  MediaPipe in a MODULE worker: build fileset by hand (module_internal js/wasm), import the loader and set self.ModuleFactory before EACH createFromOptions (MediaPipe deletes it; ESM evaluates once). CPU delegate. FaceLandmarker numFaces 12, conf 0.6 (0.45 → false face on a bike wheel; 0.7 → misses 2/6 in group), blendshapes + matrices. PoseLandmarker lite numPoses 6, conf 0.6; body counted only with both shoulders + (both hips or head: nose/eyes/ears) + upright + human proportions when hips visible (hips 0.3–1.3× and torso ≤2.5× shoulder width; samples 0.4–0.7 / 0.7–1.8; a motorbike gave torso 5.4). Pass 1 on 640 detail; pass 2 on 3×2 (2×3) overlapping tiles of master when anyone found or aspect>1.2; dedupe by IoU/centre. faceSharpness = subjectSharpness on face tiles (overlap test)
 src/analysis/people.ts      types Face/Body/People, summarize (count = faces + faceless bodies, eyesOpen blink<0.4, largestFace), subjectBoxes (face + headroom, faceless body upper 60%), headAngles (sign convention unverified)
 src/analysis/vision.ts      findPeople(): one worker, sequential, streams results; main re-analyses (debounced 400 ms). Status line #people-status
 gate.ts                     defects use faceSharpness when faces; replacement must be same scene AND have people if the failing photo has; burst keeper = most eyes-open faces, then Q
-selection/index.ts          selectPhotos(photos, max, score): split chronologically into max equal runs, best slotScore per run. slotScore: people → 2 + count/size/open-eyes bonuses; else quality only
+selection/index.ts          selectPhotos(photos, max, score): PEOPLE FIRST GLOBALLY (user: food chosen over distinct unused people photos): people photos fill slots via spread() (max equal runs, best slotScore each); others only fill the leftover slots, also spread; chronological output. slotScore: people → 2 + count/size/open-eyes bonuses; else quality
 render/crop.ts              frameFor(…, subjects): if union of subjects fits the cover window (≤96%) → cover placed on them (centre at 42% height); else fit with edge trim reduced so nobody is cut; no subjects → old rule. Tiles mirror it via object-position
 ```
 Verified: sample album (8): group photo = 6 people exactly, portraits = 1, food/cat/rocket/bike/grass = 0, 2.3 s. Face sharpness sharp 0.48–1.1 vs blurred 0.10–0.13. 50-photo album (10 people photos interleaved) with 20 slots → all 10 people photos picked, 1 non-people per remaining run; no false positives after tuning; frames: group fitted whole, sub-group/portrait cropped around faces. 43 unit tests. Not verified: real phone albums (night, sunglasses, crowds), speed on phones (~0.13 s/photo headless desktop), big crowds (numFaces 12 cap), person_camera (face hidden behind camera) → 0 people.
 
-## 7c. Milestone 4b scope — friends + scene types
-- Identity embeddings (permissive model; NOT InsightFace) → cluster across album; recurring = friends, one-off small = strangers; friend coverage in selection (plan step 3 global swap-in).
-- CLIP (transformers.js, small quantized, lazy, cached): labels (food, landscape, landmark, sunset, party…), embeddings for variety (MMR) and highlight prompts. Cap food/landscape share.
-- Verify licenses + sizes first; models must be self-hosted like M4a.
+## 7c. Milestone 4b part 1 — DONE (friends)
+```
+model                       OpenCV Zoo SFace int8 (face_recognition_sface_2021dec_int8.onnx, 9.9 MB, Apache-2.0, LFW 99.32% vs fp32 99.40%); downloaded by scripts/assets.mjs from media.githubusercontent.com (reachable from sandbox AND CI). Runtime: onnxruntime-web 1.30.0 'onnxruntime-web/wasm', numThreads 1 (no COOP/COEP on Pages), wasmPaths {wasm: base/ort/ort-wasm-simd-threaded.wasm}, logSeverityLevel 3 (graph-initializer warnings spam)
+src/analysis/align.ts       ArcFace 112 template, Umeyama similarity → canvas setTransform; cosine; l2normalize
+vision.worker.ts            5 pts from MediaPipe mesh: eyes avg(33,133)/avg(362,263) (image left/right), nose 1, mouth 61/291; embed faces with box.h ≥ 0.035 and |yaw| ≤ 50 from MASTER copy; input RGB 0–255 NCHW (OpenCV FaceRecognizerSF: blobFromImage swapRB, no mean)
+src/analysis/friends.ts     clusterPeople: average-linkage agglomerative, stop at cosine 0.363 (SFace published threshold), cannot-link faces in same photo; Person {photoIds, moments (distinct bursts), largest, friend = moments ≥ 2 || largest ≥ 0.07}
+selection/index.ts          Who {friends(p), known}. isPeoplePhoto: before recognition any person; after: friends > 0 OR unidentified subject (face w/o embedding ≥ 0.07, or body ≥ 0.45 tall). coverFriends(): after people-first spread, swap each missing friend's best photo in for the weakest pick that isn't any friend's only photo (plan step 3). Selection.friendSwaps
+main.ts                     updateFriends() after people finder finishes; friends strip (#friends) with 96 px face crops from detail copy, "in reel / in album", strangers count
+```
+Verified: mirrored/cropped/zoomed copies of a 6-person group + astronaut → 6 coherent clusters, same-face mirror cosine 0.94–0.97, no cross-person merges; a missing person = face not embedded (too small/side-on). 50-photo albums: all 10 people photos picked; friend coverage unit-tested. 12.7 s for 50 photos (10 with people) headless. 51 unit tests. Not verified: same friend across genuinely different photos (lighting/age/sunglasses) — no such test data here; threshold may need tuning on Krish's album.
+
+## 7d. M4b part 2 — CLIP scene types (BLOCKED on model access)
+- Plan: transformers.js + small quantized CLIP (Xenova/clip-vit-base-patch32, MIT weights; vision encoder q8 ~88 MB), text embeddings for fixed labels precomputed at build time → ship JSON; runtime vision only.
+- huggingface.co is blocked in this sandbox (and probing mirrors was refused) → cannot download/test. Options for user: allow huggingface.co in claude.ai Settings → Capabilities; or ship CI-download untested; or defer.
 
 ## 8. Test recipe
 - Synthetic photos: PIL random ellipses/lines scenes (`scene(seed,label)`), EXIF via `Image.Exif()[0x8769]={0x9003:'YYYY:MM:DD HH:MM:SS'}`; HEIC via `pillow_heif` (pip, `--break-system-packages`); blur = GaussianBlur(25–30).

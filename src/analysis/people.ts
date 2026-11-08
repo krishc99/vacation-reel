@@ -19,6 +19,8 @@ export interface Face {
   /** Degrees from the face transformation matrix (sign convention unverified; use magnitudes). */
   yaw: number;
   pitch: number;
+  /** 128-d SFace identity embedding (L2-normalised); absent for tiny or side-on faces. */
+  embedding?: number[];
 }
 
 export interface Body {

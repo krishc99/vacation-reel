@@ -17,7 +17,8 @@ import { maxPhotosForMusic, planMusicTimeline, songParts, type SongStart } from 
 import { renderReel, type RenderJob } from './render/renderer';
 import { frameFor } from './render/crop';
 import { buildTimeline, timelineDuration } from './render/timeline';
-import { selectPhotos, slotScore } from './selection';
+import { NO_WHO, selectPhotos, slotScore, type Who } from './selection';
+import { clusterPeople, type FaceRef, type Person } from './analysis/friends';
 import { DEFAULT_SETTINGS, SHAPE_SIZE, type Clip, type Photo, type ReelSettings, type Shape } from './types';
 import { megabytes, shotTime, shotTimeFull, timecode } from './ui/format';
 
@@ -32,6 +33,9 @@ const el = {
   fileInput: $<HTMLInputElement>('file-input'),
   importStatus: $('import-status'),
   peopleStatus: $('people-status'),
+  friends: $('friends'),
+  friendList: $<HTMLUListElement>('friend-list'),
+  friendsNote: $('friends-note'),
   skipped: $<HTMLUListElement>('skipped'),
   orderSection: $('order-section'),
   orderSummary: $('order-summary'),
@@ -149,6 +153,9 @@ el.drop.addEventListener('drop', (e) => {
 
 let visionJob: VisionJob | null = null;
 let refreshTimer = 0;
+let persons: Person[] = [];
+let who: Who = NO_WHO;
+const faceThumbs = new Map<string, string>();
 
 /** Re-run analysis as people results stream in (batched so the grid doesn't thrash). */
 function scheduleRefresh() {
@@ -183,13 +190,86 @@ function startPeople() {
     el.peopleStatus.textContent = error
       ? `People finder unavailable (${error}). Photos are picked without it.`
       : `People in ${withPeople} of ${photos.length} photos (${secs}s).` + (failed ? ` ${failed} could not be checked.` : '');
+    if (!error) {
+      analysis = analyzeAlbum(photos);
+      updateFriends();
+    }
     scheduleRefresh();
   });
+}
+
+// ---- Friends (M4b): who recurs across the album ---------------------------------
+
+function updateFriends() {
+  const faces: FaceRef[] = [];
+  for (const p of photos) {
+    p.people?.faces.forEach((f, i) => {
+      if (f.embedding)
+        faces.push({ photoId: p.id, burstId: analysis?.verdicts.get(p.id)?.burstId ?? p.id, faceIndex: i, embedding: f.embedding, size: f.box.h });
+    });
+  }
+  persons = clusterPeople(faces);
+  const byPhoto = new Map<string, string[]>();
+  for (const person of persons) {
+    if (!person.friend) continue;
+    for (const id of person.photoIds) byPhoto.set(id, [...(byPhoto.get(id) ?? []), person.id]);
+  }
+  who = { friends: (p) => byPhoto.get(p.id) ?? [], known: true };
+  faceThumbs.forEach((u) => URL.revokeObjectURL(u));
+  faceThumbs.clear();
+  void makeFaceThumbs().then(() => renderGrid());
+}
+
+/** Small square crop of each friend's biggest face (from the 640 px copy). */
+async function makeFaceThumbs() {
+  const byId = new Map(photos.map((p) => [p.id, p]));
+  for (const person of persons.filter((x) => x.friend)) {
+    const ref = person.faces.reduce((a, b) => (b.size > a.size ? b : a));
+    const photo = byId.get(ref.photoId);
+    const box = photo?.people?.faces[ref.faceIndex]?.box;
+    if (!photo || !box) continue;
+    const bmp = await createImageBitmap(photo.detail);
+    const side = Math.max(box.w * bmp.width, box.h * bmp.height) * 1.4;
+    const cx = (box.x + box.w / 2) * bmp.width;
+    const cy = (box.y + box.h / 2) * bmp.height;
+    const c = new OffscreenCanvas(96, 96);
+    c.getContext('2d')!.drawImage(bmp, cx - side / 2, cy - side / 2, side, side, 0, 0, 96, 96);
+    bmp.close();
+    faceThumbs.set(person.id, URL.createObjectURL(await c.convertToBlob({ type: 'image/jpeg', quality: 0.85 })));
+  }
+}
+
+function renderFriends(picks: Photo[]) {
+  const friends = persons.filter((p) => p.friend);
+  el.friends.hidden = !who.known || friends.length === 0;
+  if (el.friends.hidden) return;
+  const inReel = new Set(picks.map((p) => p.id));
+  const strangers = persons.filter((p) => !p.friend).length;
+  el.friendList.replaceChildren(
+    ...friends.map((f) => {
+      const li = document.createElement('li');
+      const shown = f.photoIds.filter((id) => inReel.has(id)).length;
+      li.className = shown ? 'friend' : 'friend is-missing';
+      const img = document.createElement('img');
+      img.alt = '';
+      if (faceThumbs.has(f.id)) img.src = faceThumbs.get(f.id)!;
+      const n = document.createElement('span');
+      n.textContent = `${shown}/${f.photoIds.length}`;
+      li.title = `In ${f.photoIds.length} photo${f.photoIds.length === 1 ? '' : 's'}; ${shown} in the reel.`;
+      li.append(img, n);
+      return li;
+    }),
+  );
+  el.friendsNote.textContent =
+    `${friends.length} ${friends.length === 1 ? 'person' : 'people'} recognised across your photos (in reel / in album). ` +
+    (strangers ? `${strangers} one-off face${strangers === 1 ? '' : 's'} treated as strangers.` : '');
 }
 
 el.clear.addEventListener('click', () => {
   visionJob?.cancel();
   visionJob = null;
+  persons = [];
+  who = NO_WHO;
   el.peopleStatus.textContent = '';
   photos.forEach((p) => URL.revokeObjectURL(p.thumbUrl));
   photos = [];
@@ -237,7 +317,8 @@ function currentPlan(): Plan {
     ? maxPhotosForMusic(song.beats, settings, songStart, songPart)
     : Math.floor(settings.maxSeconds / settings.secondsPerPhoto);
   const a = analysis;
-  const { picks, droppedForLength } = selectPhotos(candidates, max, (p) => slotScore(p, a.verdicts.get(p.id)?.q ?? 0));
+  const score = (p: Photo) => slotScore(p, a.verdicts.get(p.id)?.q ?? 0, who);
+  const { picks, droppedForLength } = selectPhotos(candidates, max, score, who);
   const ids = picks.map((p) => p.id);
   if (song && ids.length) {
     const m = planMusicTimeline(ids, song.beats, settings, songStart, songPart);
@@ -286,6 +367,7 @@ function renderGrid() {
 
   const plan = currentPlan();
   updateSongParts(plan);
+  renderFriends(plan.picks);
   const startById = new Map(plan.clips.map((c) => [c.photoId, c.start]));
   const duration = timelineDuration(plan.clips);
   const byId = new Map(photos.map((p) => [p.id, p]));
