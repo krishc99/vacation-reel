@@ -1,5 +1,5 @@
 /// <reference lib="webworker" />
-import { centerCoverCrop, frameFor } from '../render/crop';
+import { centerCoverCrop, frameFor, type Subject } from '../render/crop';
 import { createEncoder, type FrameEncoder } from '../render/encoder';
 import { timelineDuration } from '../render/timeline';
 import type { RenderRequest, RenderResponse } from '../types';
@@ -27,10 +27,10 @@ function blurredCover(full: ImageBitmap, w: number, h: number): OffscreenCanvas 
  * reel's shape, e.g. landscape group shots in a vertical reel) shown whole over
  * a blurred, darkened copy of itself so nobody at the edges is cut off.
  */
-async function drawPhoto(ctx: OffscreenCanvasRenderingContext2D, image: Blob, w: number, h: number) {
+async function drawPhoto(ctx: OffscreenCanvasRenderingContext2D, image: Blob, w: number, h: number, subjects: Subject[]) {
   const full = await createImageBitmap(image);
   try {
-    const f = frameFor(full.width, full.height, w, h);
+    const f = frameFor(full.width, full.height, w, h, subjects);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
     ctx.fillStyle = '#000';
@@ -51,7 +51,7 @@ async function drawPhoto(ctx: OffscreenCanvasRenderingContext2D, image: Blob, w:
 
 self.onmessage = async (e: MessageEvent<RenderRequest>) => {
   if (e.data.type !== 'render') return;
-  const { clips, images, settings: s, audio } = e.data;
+  const { clips, images, subjects, settings: s, audio } = e.data;
   let enc: FrameEncoder | null = null;
   try {
     enc = await createEncoder(s, audio);
@@ -61,7 +61,7 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
     let frame = 0;
 
     for (const clip of clips) {
-      await drawPhoto(ctx, images[clip.photoId], s.width, s.height);
+      await drawPhoto(ctx, images[clip.photoId], s.width, s.height, subjects[clip.photoId] ?? []);
 
       // Static frame repeated at constant frame rate (Ken Burns arrives in Milestone 8).
       const endFrame = Math.round((clip.start + clip.duration) * s.fps);
