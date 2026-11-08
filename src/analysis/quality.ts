@@ -111,10 +111,11 @@ export function subjectSharpness(g: Gray, regions?: Region[], noiseSigma = 0): n
     return { i, structure: vc, ratio: Math.max(0, vf - 20 * s * s) / vc };
   });
   if (regions?.length) {
+    // Tiles overlapping any region (small faces can sit inside a single tile).
     const inside = tiles.filter(({ i }) => {
-      const cx = ((i % GRID) + 0.5) / GRID;
-      const cy = (Math.floor(i / GRID) + 0.5) / GRID;
-      return regions.some((r) => cx >= r.x && cx <= r.x + r.w && cy >= r.y && cy <= r.y + r.h);
+      const x0 = (i % GRID) / GRID;
+      const y0 = Math.floor(i / GRID) / GRID;
+      return regions.some((r) => r.x < x0 + 1 / GRID && r.x + r.w > x0 && r.y < y0 + 1 / GRID && r.y + r.h > y0);
     });
     if (inside.length) tiles = inside;
   } else {

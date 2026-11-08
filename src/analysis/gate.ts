@@ -1,5 +1,6 @@
 import { groupBursts, groupMoments, type BurstInput } from './bursts';
 import { hamming } from './dhash';
+import type { People } from './people';
 import type { QualityStats } from './quality';
 
 export type Reason = 'blurry' | 'dark' | 'bright';
@@ -7,6 +8,8 @@ export type Status = 'keeper' | 'alternate' | 'rejected';
 
 export interface AnalysisInput extends BurstInput {
   stats: QualityStats;
+  /** Faces/bodies once the people finder has run. */
+  people?: People;
 }
 
 export interface Verdict {
@@ -86,9 +89,11 @@ export const sharpScore = (s: QualityStats) => clamp01((s.sharpness - 0.2) / 0.2
 export const noiseScore = (s: QualityStats) => clamp01(1 - (Math.min(s.noise, 5) - 2) / 6);
 
 /** Real, absolute problems. Ranking low in the album alone is not a defect. */
-export function defects(s: QualityStats, o = GATE_DEFAULTS): Reason[] {
+export function defects(s: QualityStats, o = GATE_DEFAULTS, people?: People): Reason[] {
   const r: Reason[] = [];
-  if (s.sharpness < o.blurryBelow) r.push('blurry');
+  // With faces, judge sharpness on the faces (a soft background is fine; a soft face isn't).
+  const sharp = people?.faceSharpness ?? s.sharpness;
+  if (sharp < o.blurryBelow) r.push('blurry');
   if (s.meanLuma < o.darkMeanBelow || s.shadowClip > o.darkClipAbove) r.push('dark');
   else if (s.meanLuma > o.brightMeanAbove || s.highlightClip > o.brightClipAbove) r.push('bright');
   return r;
@@ -101,10 +106,13 @@ export function analyzeAlbum(sortedItems: AnalysisInput[], opts = GATE_DEFAULTS)
   );
 
   const idx = new Map(sortedItems.map((p, i) => [p.id, i]));
-  // Within a burst the scene is the same, so raw sharpness breaks ties fairly.
+  // Burst keeper: most faces with eyes open first (M5 refines this), then
+  // quality; raw sharpness breaks ties (same scene, so it compares fairly).
+  const eyes = (i: number) => sortedItems[i].people?.eyesOpen ?? 0;
   const better = (a: string, b: string) => {
     const ia = idx.get(a)!;
     const ib = idx.get(b)!;
+    if (eyes(ia) !== eyes(ib)) return eyes(ia) > eyes(ib);
     return q[ia] !== q[ib] ? q[ia] > q[ib] : sortedItems[ia].stats.sharpness > sortedItems[ib].stats.sharpness;
   };
   const verdicts = new Map<string, Verdict>();
@@ -116,7 +124,7 @@ export function analyzeAlbum(sortedItems: AnalysisInput[], opts = GATE_DEFAULTS)
         burstId: `b${b}`,
         status: id === keeperId ? 'keeper' : 'alternate',
         q: q[idx.get(id)!],
-        reasons: defects(sortedItems[idx.get(id)!].stats, opts),
+        reasons: defects(sortedItems[idx.get(id)!].stats, opts, sortedItems[idx.get(id)!].people),
         onlyOfMoment: false,
       });
     }
@@ -130,12 +138,17 @@ export function analyzeAlbum(sortedItems: AnalysisInput[], opts = GATE_DEFAULTS)
   const keepers = bursts.map((b) => sortedItems[idx.get(b.keeperId)!]);
   const fails = new Set(keepers.filter((p) => verdicts.get(p.id)!.reasons.length > 0).map((p) => p.id));
   const hashOf = (id: string) => sortedItems[idx.get(id)!].dhash;
+  const peopleIn = (id: string) => sortedItems[idx.get(id)!].people?.count ?? 0;
   for (const moment of groupMoments(keepers, opts.momentGapSec)) {
     for (const id of moment) {
       if (!fails.has(id)) continue;
       const v = verdicts.get(id)!;
+      // A replacement must show the same scene, and if this photo has people, people too.
       const replacement = moment.some(
-        (other) => !fails.has(other) && hamming(hashOf(id), hashOf(other)) <= opts.sameSceneMaxDist,
+        (other) =>
+          !fails.has(other) &&
+          hamming(hashOf(id), hashOf(other)) <= opts.sameSceneMaxDist &&
+          peopleIn(other) >= Math.min(1, peopleIn(id)),
       );
       if (replacement) v.status = 'rejected';
       else v.onlyOfMoment = true;

@@ -184,6 +184,21 @@ describe('analyzeAlbum', () => {
     expect(a.verdicts.get('friends-soft')!.onlyOfMoment).toBe(true);
   });
 
+  it('a blurry photo of friends is not replaced by a clean shot of the same scene without them', () => {
+    const ppl = (n: number, fs: number) => ({ faces: [], bodies: [], count: n, eyesOpen: n, largestFace: 0.1, faceSharpness: fs });
+    const a = analyzeAlbum([
+      { ...item('empty-beach', 0, good, 0x0), people: ppl(0, 0) },
+      { ...item('friends-blurry', 1, blurry, 0x1), people: ppl(3, 0.1) },
+    ]);
+    expect(a.verdicts.get('friends-blurry')!.status).toBe('keeper');
+  });
+
+  it('judges sharpness on faces when there are faces', () => {
+    const ppl = { faces: [], bodies: [], count: 1, eyesOpen: 1, largestFace: 0.3, faceSharpness: 0.08 };
+    const a = analyzeAlbum([item('g', 0, good, 0), { ...item('soft-face', 1, good, 1), people: ppl }]);
+    expect(a.verdicts.get('soft-face')!.reasons).toEqual(['blurry']);
+  });
+
   it('slightly soft (phone noise reduction) is not a defect', () => {
     const a = analyzeAlbum([item('g', 0, good, 0), item('soft', 1, { ...good, sharpness: 0.2 }, 1)]);
     expect(a.verdicts.get('soft')!.reasons).toEqual([]);
