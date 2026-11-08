@@ -7,6 +7,13 @@ import type { ImportResponse } from '../types';
 import { decodeImage, looksLikeHeif } from './decode';
 import { readExif } from './exif';
 
+/**
+ * Long edge of the copy kept for rendering. Enough for a 1080×1920 / 1920×1080
+ * cover crop from any 4:3 or 3:2 photo, with headroom for Ken Burns (M8).
+ * Kept because Android revokes access to picked files after a while
+ * (NotReadableError at export), so we never re-read the original.
+ */
+const MASTER_EDGE = 2560;
 const DETAIL_EDGE = 640; // detection + sharpness/noise
 const SMALL_EDGE = 256; // exposure, dHash, thumbnail
 
@@ -31,6 +38,17 @@ function drawScaled(src: CanvasImageSource & { width: number; height: number }, 
   return { canvas, gray };
 }
 
+/** Scale without reading pixels back (GPU-friendly). */
+function scaleOnly(src: CanvasImageSource & { width: number; height: number }, edge: number): OffscreenCanvas {
+  const { w, h } = scaled(src, edge);
+  const canvas = new OffscreenCanvas(w, h);
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas unavailable (device may be low on memory)');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(src, 0, 0, w, h);
+  return canvas;
+}
+
 export function errorText(err: unknown): string {
   if (err instanceof Error) return `${err.name}: ${err.message}`;
   return String(err);
@@ -47,14 +65,16 @@ export async function processPhoto(id: string, file: File): Promise<PhotoMsg | S
     const width = full.width;
     const height = full.height;
     // Downscale in two steps; full-res bitmap is released right after the first.
-    const detail = drawScaled(full, DETAIL_EDGE);
+    const master = scaleOnly(full, MASTER_EDGE);
     full.close();
+    const detail = drawScaled(master, DETAIL_EDGE);
     const small = drawScaled(detail.canvas, SMALL_EDGE);
     const isHeif = await looksLikeHeif(file);
-    const [exif, thumb, detailBlob] = await Promise.all([
+    const [exif, thumb, detailBlob, masterBlob] = await Promise.all([
       readExif(file, isHeif),
       small.canvas.convertToBlob({ type: 'image/jpeg', quality: 0.8 }),
       detail.canvas.convertToBlob({ type: 'image/jpeg', quality: 0.85 }),
+      master.convertToBlob({ type: 'image/jpeg', quality: 0.9 }),
     ]);
     return {
       type: 'photo',
@@ -67,6 +87,7 @@ export async function processPhoto(id: string, file: File): Promise<PhotoMsg | S
       height,
       thumb,
       detail: detailBlob,
+      master: masterBlob,
       stats: measureQuality(detail.gray, small.gray),
       dhash: dhash(small.gray),
     };

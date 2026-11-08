@@ -149,6 +149,7 @@ export async function importPhotos(
         height: msg.height,
         thumbUrl: URL.createObjectURL(msg.thumb),
         detail: msg.detail,
+        master: msg.master,
         stats: msg.stats,
         dhash: msg.dhash,
       });
