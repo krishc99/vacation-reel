@@ -29,7 +29,8 @@ export const MUSIC_DEFAULTS = {
   leadInSec: 3,
   /** The finale may hold up to this many extra beats to reach the end of a phrase. */
   finaleExtraBeats: 8,
-  maxPhotos: 25,
+  /** Upper bound only; the real count comes from how long the chorus is at the chosen pace. */
+  maxPhotos: 40,
 };
 
 function beatPeriod(a: BeatAnalysis): number {

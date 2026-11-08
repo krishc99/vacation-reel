@@ -8,7 +8,7 @@ import {
   type Overrides,
   type Reason,
 } from './analysis';
-import { subjectBoxes } from './analysis/people';
+import { dropObjectFaces, subjectBoxes } from './analysis/people';
 import { findPeople, type VisionJob } from './analysis/vision';
 import { findScenes, type SceneJob } from './analysis/sceneJob';
 import { SCENE_LABEL, SCENES_ENABLED } from './analysis/scenes';
@@ -165,6 +165,7 @@ el.drop.addEventListener('drop', (e) => {
 let visionJob: VisionJob | null = null;
 let refreshTimer = 0;
 let persons: Person[] = [];
+let lastVarietySwaps = 0;
 let who: Who = NO_WHO;
 const faceThumbs = new Map<string, string>();
 
@@ -232,7 +233,10 @@ function startScenes() {
     photos,
     (id, scene) => {
       const p = byId.get(id);
-      if (p) p.scene = scene;
+      if (p) {
+        p.scene = scene;
+        if (p.people) p.people = dropObjectFaces(p.people, scene);
+      }
       scheduleRefresh();
     },
     (done, total) => (el.sceneStatus.textContent = `Sorting scenes… ${done} of ${total}`),
@@ -248,6 +252,11 @@ function startScenes() {
     el.sceneStatus.textContent = error
       ? `Scene finder unavailable (${error}). Food and scenery are not told apart.`
       : `Scenes: ${top} (${secs}s).` + (failed ? ` ${failed} could not be checked.` : '');
+    // Object "faces" may have been dropped: regroup friends.
+    if (!error && who.known) {
+      analysis = analyzeAlbum(photos);
+      updateFriends();
+    }
     scheduleRefresh();
   });
 }
@@ -375,7 +384,8 @@ function currentPlan(): Plan {
     : Math.floor(settings.maxSeconds / settings.secondsPerPhoto);
   const a = analysis;
   const score = (p: Photo) => slotScore(p, a.verdicts.get(p.id)?.q ?? 0, who);
-  const { picks, droppedForLength } = selectPhotos(candidates, max, score, who);
+  const { picks, droppedForLength, varietySwaps } = selectPhotos(candidates, max, score, who);
+  lastVarietySwaps = varietySwaps;
   const ids = picks.map((p) => p.id);
   if (song && ids.length) {
     const m = planMusicTimeline(ids, song.beats, settings, songStart, songPart);
@@ -438,8 +448,14 @@ function renderGrid() {
     `${plan.picks.length} in the reel · ${timecode(duration)}${song ? ` cut to ${Math.round(song.beats.bpm)} BPM` : ''}`,
   ].filter(Boolean);
   let summary = parts.join(' · ') + '.';
+  if (lastVarietySwaps > 0) summary += ` ${lastVarietySwaps} near-repeat shot${lastVarietySwaps === 1 ? '' : 's'} swapped for different scenes.`;
   if (plan.droppedForLength > 0) {
-    summary += ` ${plan.droppedForLength} more left out to stay under ${settings.maxSeconds}s, spread evenly across the trip.`;
+    const why = song
+      ? plan.coversSection
+        ? 'to end with the chorus'
+        : `to fit the music in ${settings.maxSeconds}s`
+      : `to stay under ${settings.maxSeconds}s`;
+    summary += ` ${plan.droppedForLength} more left out ${why}; the ones kept are spread across the trip.`;
   } else if (duration < settings.minSeconds - 0.05 && plan.picks.length) {
     summary += ` Add a few more photos for a ${settings.minSeconds}s reel.`;
   }

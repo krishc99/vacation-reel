@@ -122,6 +122,12 @@ Also: status line now "People in X of N · F faces, I recognisable → K people 
 - Scene finder starts only after the people finder finishes (one heavy download/compile at a time on phones).
 - Phone import pool: 2 if navigator.deviceMemory ≥ 6, else 1. Master JPEG q 0.88.
 
+## 7d++. After Krish's 83-photo run (people 34/83, 44 faces → 11 people; scenes 37 activity, 20 food…)
+- Soup bowl detected as a face → people.ts dropObjectFaces: CLIP label food/animal/vehicle/room with p ≥ 0.5, CLIP people < 0.1, no body, ≤ 2 faces → faces dropped (applied when the scene arrives; friends regrouped after scenes finish).
+- Similar photos picked → selection diversify(): chronological; pick with CLIP cos ≥ 0.9 to an earlier pick is swapped for best unpicked photo between its neighbours that is < 0.9 to all picks; people↔people only; never drop a friend's last spot. Selection.varietySwaps shown in summary.
+- Only 25 photos / 22.9 s → MUSIC_DEFAULTS.maxPhotos 25 → 40 (cap only; count comes from chorus length at preferred pace, ≤ 30 s). Summary says why photos were left out (end with the chorus / fit music in 30 s / stay under 30 s).
+- OPEN: "activity" = 37/83 suspicious (labels/prompt tuning on real photos needed).
+
 ## 7e. Milestone 5 scope — classic best-photo picking (plan)
 Face checks per burst: eyes open (both eyeBlink < 0.4, heaviest), yaw < 25°, pitch not down, smile bonus, sharp face crop, box not touching edge. Winner: most passing faces → best worst-face → avg smile → sharpness. Expected count = max faces in burst; missing face = fail. Intentional vs accidental expressions (shared/held = intentional). A burst can yield several keepers (fun modes M6).
 

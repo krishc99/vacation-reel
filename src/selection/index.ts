@@ -6,6 +6,8 @@ export interface Selection {
   droppedForLength: number;
   /** Friends swapped in so everyone appears at least once. */
   friendSwaps: number;
+  /** Near-repeat shots swapped for different-looking ones. */
+  varietySwaps: number;
 }
 
 /**
@@ -120,6 +122,54 @@ function fillOthers(others: Photo[], slots: number, score: (p: Photo) => number)
   return [...spread(rest, restSlots, score), ...spread(food, slots - restSlots, score)];
 }
 
+/** CLIP image similarity at or above which two photos count as "the same shot again". */
+export const SIMILAR = 0.9;
+
+function clipSim(a: Photo, b: Photo): number {
+  const x = a.scene?.embedding;
+  const y = b.scene?.embedding;
+  if (!x || !y || x.length !== y.length) return 0;
+  let s = 0;
+  for (let i = 0; i < x.length; i++) s += x[i] * y[i];
+  return s;
+}
+
+/**
+ * Variety pass: walking the picks in time order, a pick that looks like an
+ * earlier pick (CLIP ≥ SIMILAR) is swapped for the best unpicked photo from the
+ * same stretch of the trip (between its neighbours) that looks different from
+ * every pick. People photos are only swapped for people photos, and only if no
+ * friend loses their last spot.
+ */
+function diversify(all: Photo[], picks: Set<Photo>, score: (p: Photo) => number, who: Who): number {
+  const order = all.filter((p) => picks.has(p));
+  const pos = new Map(all.map((p, i) => [p, i]));
+  let swaps = 0;
+  for (let k = 1; k < order.length; k++) {
+    const cur = order[k];
+    if (!order.slice(0, k).some((q) => clipSim(q, cur) >= SIMILAR)) continue;
+    const from = pos.get(order[k - 1])! + 1;
+    const to = k + 1 < order.length ? pos.get(order[k + 1])! : all.length;
+    const friendCount = new Map<string, number>();
+    for (const q of picks) for (const f of who.friends(q)) friendCount.set(f, (friendCount.get(f) ?? 0) + 1);
+    const losesFriend = (p: Photo) => who.friends(p).some((f) => (friendCount.get(f) ?? 0) <= 1);
+    const needPeople = isPeoplePhoto(cur, who);
+    let best: Photo | null = null;
+    for (let i = from; i < to; i++) {
+      const c = all[i];
+      if (picks.has(c) || isPeoplePhoto(c, who) !== needPeople) continue;
+      if ([...picks].some((q) => q !== cur && clipSim(q, c) >= SIMILAR)) continue;
+      if (!best || score(c) > score(best)) best = c;
+    }
+    if (!best || losesFriend(cur) && !who.friends(cur).every((f) => who.friends(best!).includes(f))) continue;
+    picks.delete(cur);
+    picks.add(best);
+    order[k] = best;
+    swaps++;
+  }
+  return swaps;
+}
+
 /**
  * People first, across the whole trip: photos with people (friends, once known)
  * fill the slots, spread over time, best per stretch; food/scenery only fills
@@ -132,12 +182,13 @@ export function selectPhotos(
   score: (p: Photo) => number = () => 0,
   who: Who = NO_WHO,
 ): Selection {
-  if (photos.length <= max) return { picks: photos, droppedForLength: 0, friendSwaps: 0 };
-  if (max <= 0) return { picks: [], droppedForLength: photos.length, friendSwaps: 0 };
+  if (photos.length <= max) return { picks: photos, droppedForLength: 0, friendSwaps: 0, varietySwaps: 0 };
+  if (max <= 0) return { picks: [], droppedForLength: photos.length, friendSwaps: 0, varietySwaps: 0 };
   const people = photos.filter((p) => isPeoplePhoto(p, who));
   const others = photos.filter((p) => !isPeoplePhoto(p, who));
   const chosen = new Set([...spread(people, max, score), ...fillOthers(others, max - Math.min(max, people.length), score)]);
   const friendSwaps = coverFriends(photos, chosen, score, who);
+  const varietySwaps = diversify(photos, chosen, score, who);
   const picks = photos.filter((p) => chosen.has(p));
-  return { picks, droppedForLength: photos.length - picks.length, friendSwaps };
+  return { picks, droppedForLength: photos.length - picks.length, friendSwaps, varietySwaps };
 }

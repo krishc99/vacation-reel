@@ -124,3 +124,15 @@ export function headAngles(m: ArrayLike<number>): { yaw: number; pitch: number }
     pitch: (Math.atan2(-fy, Math.hypot(fx, fz)) * 180) / Math.PI,
   };
 }
+
+/**
+ * The face detector occasionally sees a face in an object (a soup bowl, a wheel).
+ * When CLIP is confident the photo is an object/food/animal/vehicle shot, CLIP's
+ * own "people" score is low, and no body was found, those few faces are dropped.
+ * A friend holding a dish still has shoulders (a body) and a real people score.
+ */
+export function dropObjectFaces(p: People, scene: { label: string; probs: Partial<Record<string, number>> }): People {
+  const objecty = ['food', 'animal', 'vehicle', 'room'].includes(scene.label) && (scene.probs[scene.label] ?? 0) >= 0.5;
+  if (!objecty || p.bodies.length > 0 || p.faces.length > 2 || (scene.probs.people ?? 0) >= 0.1) return p;
+  return summarize([], p.bodies, null);
+}

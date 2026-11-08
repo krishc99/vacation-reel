@@ -65,6 +65,19 @@ describe('selectPhotos (people first)', () => {
     expect(selectPhotos(foodOnly, 10).picks).toHaveLength(10);
   });
 
+  it('swaps a near-repeat shot for a different-looking one from the same stretch', () => {
+    const emb = (v: number) => [Math.cos(v), Math.sin(v)];
+    const shot = (id: string, angle: number) => ({ ...photo(id, 0), scene: { label: 'scenery', probs: {}, embedding: emb(angle) } }) as unknown as Photo;
+    // Stretch 1: two near-identical sunsets (a, b) and a different beach (c); stretch 2: d.
+    const photos = [shot('a', 0), shot('c', 1.2), shot('b', 0.05), shot('x', 0.02), shot('d', 2.5), shot('y', 2.52)];
+    const score = (p: Photo) => ({ a: 1, b: 0.9, c: 0.1, x: 0.05, d: 1, y: 0.2 })[p.id]!;
+    const { picks, varietySwaps } = selectPhotos(photos, 3, score);
+    const ids = picks.map((p) => p.id);
+    expect(ids).toContain('c'); // the different-looking photo got in
+    expect(ids.filter((i) => ['a', 'b', 'x'].includes(i))).toHaveLength(1);
+    expect(varietySwaps).toBeGreaterThanOrEqual(1);
+  });
+
   it('a sharp landscape never beats a soft-but-usable people photo', () => {
     expect(slotScore(photo('a', 1, 0.05), 0.2)).toBeGreaterThan(slotScore(photo('b', 0), 1));
   });

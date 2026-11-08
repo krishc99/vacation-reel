@@ -231,3 +231,17 @@ describe('analyzeAlbum', () => {
     expect(a.verdicts.get('b1')!.status).toBe('alternate');
   });
 });
+
+import { dropObjectFaces, summarize } from './people';
+describe('dropObjectFaces', () => {
+  const f = { box: { x: 0.4, y: 0.4, w: 0.2, h: 0.2 }, blinkL: 0, blinkR: 0, smile: 0, jawOpen: 0, yaw: 0, pitch: 0 };
+  it('drops a lone "face" in a confident food photo with no body', () => {
+    const p = summarize([f], [], 0.5);
+    expect(dropObjectFaces(p, { label: 'food', probs: { food: 0.85, people: 0.01 } }).count).toBe(0);
+  });
+  it('keeps a friend holding a dish (a body is visible)', () => {
+    const body = { box: { x: 0.3, y: 0.3, w: 0.4, h: 0.6 }, noseVisible: true, shouldersVisible: true, armsUp: false };
+    const p = summarize([f], [body], 0.5);
+    expect(dropObjectFaces(p, { label: 'food', probs: { food: 0.7, people: 0.05 } }).count).toBe(1);
+  });
+});
