@@ -85,3 +85,31 @@ export function clusterPeople(faces: FaceRef[], o = FRIEND_DEFAULTS): Person[] {
   people.forEach((p, i) => (p.id = `person${i}`));
   return people;
 }
+
+/** Mean identity embedding of a person (L2-normalised): stable across re-clustering. */
+export function centroid(p: Person): number[] {
+  const d = p.faces[0]?.embedding.length ?? 0;
+  const m = new Array<number>(d).fill(0);
+  for (const f of p.faces) f.embedding.forEach((x, i) => (m[i] += x));
+  const n = Math.hypot(...m) || 1;
+  return m.map((x) => x / n);
+}
+
+/** Same person as a remembered centroid (centroids are steadier than single faces). */
+export const ME_MATCH = 0.45;
+
+export function findMe(people: Person[], me: number[] | null): Person | null {
+  if (!me) return null;
+  let best: Person | null = null;
+  let bestSim = ME_MATCH;
+  for (const p of people) {
+    const c = centroid(p);
+    if (c.length !== me.length) continue;
+    const s = c.reduce((acc, x, i) => acc + x * me[i], 0);
+    if (s >= bestSim) {
+      bestSim = s;
+      best = p;
+    }
+  }
+  return best;
+}

@@ -106,7 +106,7 @@ async function init(base: string): Promise<string[]> {
   }
 
   const ortWasm = new URL('ort/ort-wasm-simd-threaded.wasm', base).href;
-  const sfaceModel = new URL('models/face_recognition_sface_2021dec_int8.onnx', base).href;
+  const sfaceModel = new URL('models/face_recognition_sface_2021dec.onnx', base).href;
   try {
     ort.env.wasm.numThreads = 1; // no cross-origin isolation on GitHub Pages
     ort.env.wasm.wasmBinary = await stage(ortWasm, () => fetchBytes(ortWasm));

@@ -16,6 +16,7 @@ export function findPeople(
   photos: Photo[],
   onPeople: (id: string, people: People) => void,
   onProgress: (done: number, total: number) => void,
+  onReady: () => void = () => {},
 ): VisionJob {
   const todo = photos.filter((p) => !p.people);
   const worker = new VisionWorker();
@@ -42,6 +43,7 @@ export function findPeople(
     const m = e.data;
     if (m.type === 'ready') {
       warnings = m.warnings;
+      onReady();
       return next();
     }
     if (m.type === 'fatal') {
@@ -61,6 +63,7 @@ export function findPeople(
 
   if (todo.length === 0) {
     worker.terminate();
+    onReady();
     finish({ failed: 0, error: null, warnings: [] });
   } else {
     const init: VisionRequest = { type: 'init', base: new URL(import.meta.env.BASE_URL, location.href).href };

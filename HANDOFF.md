@@ -137,6 +137,10 @@ main.ts        slot score += 0.3·faceRank.worst; tile tooltip "Faces: 4 of 6 go
 ```
 Verified: real candid group photo → readings match the picture (2 looking down at cards, laughing man eyes shut, man turned 54°, only centre man passes → "1 of 6 good"). Burst [blurred, full, centre face blocked] → keeps full ("6 soft face", "1 missing" on others). 63 unit tests. Pitch sign unverified → not used (lookDown blendshape instead). Krish's run before M5: 43 of 83 photos really have people, app found 34; 20 food correct; 2 screenshots correct.
 
+## 7e+. Speed + "this is me" (after M5)
+- Speed (Krish: import→scenes too slow; 83 photos ≈ 3.3 min). Measured in browser (single-thread wasm): CLIP q4 450 ms/photo vs int8 180 ms (native 82 vs 69) → ship vision_model_quantized (89 MB) as models/clip-vit-b32-vision-int8.onnx. SFace int8 240 ms/face vs fp32 45 ms → ship fp32 (38.7 MB) as models/face_recognition_sface_2021dec.onnx. Scene finder starts when people models are loaded (onReady), runs in parallel (2 cores). Scenes skip burst alternates. 50-photo album pick→done 41 s → 16 s headless.
+- "Me": tap a face in the friends strip (button, aria-pressed) → meCentroid = mean embedding; findMe matches centroid ≥ 0.45 after every recluster; optional "Remember me on this device" stores the 128-d centroid in localStorage (vacation-reel.me), untick = delete. Who.me → slotScore +0.4 and ensureMe(): ≥ max(2, ceil(picks/5)) photos of me if available, swapping weakest non-me picks (never a friend's only photo). Me always listed first ("You").
+
 ## 7f. Milestone 6 scope — fun modes (plan)
 Funny (jawOpen/mouthPucker/cheekPuff/eyeWide*/browInnerUp high; wink OK, half-closed both = blink), Laugh (eyes closed + big smile + open jaw), Scenic from behind (shoulders, no nose/eyes; judge scenery sharpness + framing, people small), Jump/arms up (wrists above head; highest body frame in burst). Intentional vs accidental: shared or held deviations intentional; one person in one frame accidental. A burst can yield several keepers (one per mode). Mix ~1 fun per 4–5 classic, spread out (M7 sequencing).
 

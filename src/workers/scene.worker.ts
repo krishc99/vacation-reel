@@ -8,7 +8,7 @@ import type { SceneRequest, SceneResponse } from '../types';
 
 declare const self: DedicatedWorkerGlobalScope;
 
-export const CLIP_MODEL = 'models/clip-vit-b32-vision.onnx';
+export const CLIP_MODEL = 'models/clip-vit-b32-vision-int8.onnx';
 const SIZE = 224;
 // openai/clip-vit-base-patch32 preprocessor_config.json
 const MEAN = [0.48145466, 0.4578275, 0.40821073];

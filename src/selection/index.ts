@@ -20,6 +20,8 @@ export interface Who {
   friends(p: Photo): string[];
   /** True once friend recognition has run for the album. */
   known: boolean;
+  /** The person the user marked as themselves. */
+  me?: string | null;
 }
 
 export const NO_WHO: Who = { friends: () => [], known: false };
@@ -50,8 +52,35 @@ export function slotScore(p: Photo, quality: number, who: Who = NO_WHO): number 
   const ppl = p.people;
   if (!ppl || !isPeoplePhoto(p, who)) return quality + (p.scene ? (SCENE_BONUS[p.scene.label] ?? 0) : 0);
   const n = who.known ? Math.max(1, who.friends(p).length) : ppl.count;
+  const withMe = who.me && who.friends(p).includes(who.me) ? 0.4 : 0;
   const open = ppl.faces.length ? ppl.eyesOpen / ppl.faces.length : 0.5;
-  return 2 + (0.5 * Math.min(n, 4)) / 4 + 0.5 * Math.min(1, ppl.largestFace * 3) + 0.3 * open + 0.2 * quality;
+  return 2 + withMe + (0.5 * Math.min(n, 4)) / 4 + 0.5 * Math.min(1, ppl.largestFace * 3) + 0.3 * open + 0.2 * quality;
+}
+
+/**
+ * You're usually behind the camera, so you'd barely appear. With "me" chosen,
+ * the reel keeps at least max(2, 1 in 5 photos) of you, if the album has them,
+ * swapping out the weakest picks without you (never a friend's only photo).
+ */
+function ensureMe(all: Photo[], picks: Set<Photo>, score: (p: Photo) => number, who: Who): number {
+  const me = who.me;
+  if (!me) return 0;
+  const mine = (p: Photo) => who.friends(p).includes(me);
+  const target = Math.min(all.filter(mine).length, Math.max(2, Math.ceil(picks.size / 5)));
+  let swaps = 0;
+  while ([...picks].filter(mine).length < target) {
+    const incoming = all.filter((p) => mine(p) && !picks.has(p)).sort((a, b) => score(b) - score(a))[0];
+    const count = new Map<string, number>();
+    for (const q of picks) for (const f of who.friends(q)) count.set(f, (count.get(f) ?? 0) + 1);
+    const victim = [...picks]
+      .filter((p) => !mine(p) && who.friends(p).every((f) => (count.get(f) ?? 0) > 1))
+      .sort((a, b) => score(a) - score(b))[0];
+    if (!incoming || !victim) break;
+    picks.delete(victim);
+    picks.add(incoming);
+    swaps++;
+  }
+  return swaps;
 }
 
 /** Best-scoring photo from each of `slots` equal runs of consecutive photos (keeps time spread). */
@@ -187,7 +216,7 @@ export function selectPhotos(
   const people = photos.filter((p) => isPeoplePhoto(p, who));
   const others = photos.filter((p) => !isPeoplePhoto(p, who));
   const chosen = new Set([...spread(people, max, score), ...fillOthers(others, max - Math.min(max, people.length), score)]);
-  const friendSwaps = coverFriends(photos, chosen, score, who);
+  const friendSwaps = coverFriends(photos, chosen, score, who) + ensureMe(photos, chosen, score, who);
   const varietySwaps = diversify(photos, chosen, score, who);
   const picks = photos.filter((p) => chosen.has(p));
   return { picks, droppedForLength: photos.length - picks.length, friendSwaps, varietySwaps };

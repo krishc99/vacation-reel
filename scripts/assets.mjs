@@ -21,15 +21,16 @@ const MODELS = {
   // Apache-2.0, https://ai.google.dev/edge/mediapipe/solutions/vision/pose_landmarker
   'pose_landmarker_lite.task':
     'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
-  // Apache-2.0, OpenCV Zoo SFace (MobileFaceNet, int8; LFW 99.32%):
+  // Apache-2.0, OpenCV Zoo SFace (MobileFaceNet, LFW 99.40%). Full precision: in
+  // the browser's wasm engine it runs ~5× faster than the int8 file (45 vs 240 ms/face).
   // https://github.com/opencv/opencv_zoo/tree/main/models/face_recognition_sface
-  'face_recognition_sface_2021dec_int8.onnx':
-    'https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/face_recognition_sface/face_recognition_sface_2021dec_int8.onnx',
-  // MIT (OpenAI CLIP ViT-B/32, ONNX export by Xenova), 4-bit weights (64 MB; embeddings
-  // 0.95–0.99 cosine to full precision on samples). Image encoder only; label
-  // embeddings are precomputed in src/analysis/sceneLabels.json (scripts/clip_labels.py).
-  'clip-vit-b32-vision.onnx':
-    'https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/onnx/vision_model_q4.onnx',
+  'face_recognition_sface_2021dec.onnx':
+    'https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx',
+  // MIT (OpenAI CLIP ViT-B/32, ONNX export by Xenova), 8-bit (89 MB): ~2.5× faster in
+  // the browser than the 4-bit file (180 vs 450 ms/photo), same labels on samples.
+  // Image encoder only; label embeddings are precomputed in src/analysis/sceneLabels.json.
+  'clip-vit-b32-vision-int8.onnx':
+    'https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/onnx/vision_model_quantized.onnx',
 };
 
 const exists = (p) => stat(p).then((s) => s.size > 0, () => false);

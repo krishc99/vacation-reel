@@ -78,6 +78,14 @@ describe('selectPhotos (people first)', () => {
     expect(varietySwaps).toBeGreaterThanOrEqual(1);
   });
 
+  it('keeps at least 2 (or 1 in 5) photos of you once you mark yourself', () => {
+    const photos = Array.from({ length: 40 }, (_, i) => photo(`p${i}`, 1));
+    const friends = (p: Photo) => (['p3', 'p17', 'p31'].includes(p.id) ? ['me', 'a'] : ['a']);
+    const score = (p: Photo) => (['p3', 'p17', 'p31'].includes(p.id) ? 0 : 1);
+    const { picks } = selectPhotos(photos, 10, score, { friends, known: true, me: 'me' });
+    expect(picks.filter((p) => ['p3', 'p17', 'p31'].includes(p.id)).length).toBe(2);
+  });
+
   it('a sharp landscape never beats a soft-but-usable people photo', () => {
     expect(slotScore(photo('a', 1, 0.05), 0.2)).toBeGreaterThan(slotScore(photo('b', 0), 1));
   });

@@ -20,7 +20,7 @@ import { renderReel, type RenderJob } from './render/renderer';
 import { frameFor } from './render/crop';
 import { buildTimeline, timelineDuration } from './render/timeline';
 import { NO_WHO, selectPhotos, slotScore, type Who } from './selection';
-import { clusterPeople, type FaceRef, type Person } from './analysis/friends';
+import { centroid, clusterPeople, findMe, type FaceRef, type Person } from './analysis/friends';
 import { DEFAULT_SETTINGS, SHAPE_SIZE, type Clip, type Photo, type ReelSettings, type Shape } from './types';
 import { megabytes, shotTime, shotTimeFull, timecode } from './ui/format';
 
@@ -39,6 +39,8 @@ const el = {
   friends: $('friends'),
   friendList: $<HTMLUListElement>('friend-list'),
   friendsNote: $('friends-note'),
+  meRemember: $('me-remember'),
+  meRememberBox: $<HTMLInputElement>('me-remember-box'),
   skipped: $<HTMLUListElement>('skipped'),
   orderSection: $('order-section'),
   orderSummary: $('order-summary'),
@@ -121,9 +123,16 @@ async function addFiles(list: FileList | File[]) {
     showSkipped(skipped);
     clearResult();
     renderGrid();
-    // One heavy model download at a time (phones choke on both at once):
-    // the scene finder starts when the people finder is done.
-    startPeople().finally(startScenes);
+    // One heavy download at a time (phones choke on both at once), but run the
+    // two finders side by side: scenes start once the people models are in.
+    let scenesStarted = false;
+    const scenes = () => {
+      if (!scenesStarted) {
+        scenesStarted = true;
+        startScenes();
+      }
+    };
+    startPeople(scenes).finally(scenes);
   } catch (err) {
     el.importStatus.textContent = `Could not read photos: ${(err as Error).message}`;
   } finally {
@@ -165,6 +174,34 @@ el.drop.addEventListener('drop', (e) => {
 let visionJob: VisionJob | null = null;
 let refreshTimer = 0;
 let persons: Person[] = [];
+/** "Me": identity centroid chosen by the user; optionally remembered in this browser only. */
+const ME_KEY = 'vacation-reel.me';
+let meCentroid: number[] | null = loadMe();
+let meId: string | null = null;
+
+function loadMe(): number[] | null {
+  try {
+    const v = JSON.parse(localStorage.getItem(ME_KEY) ?? 'null');
+    return Array.isArray(v) && v.length === 128 ? v : null;
+  } catch {
+    return null;
+  }
+}
+function rememberMe(on: boolean) {
+  try {
+    if (on && meCentroid) localStorage.setItem(ME_KEY, JSON.stringify(meCentroid.map((x) => +x.toFixed(5))));
+    else localStorage.removeItem(ME_KEY);
+  } catch {
+    /* storage blocked: choice still applies to this album */
+  }
+}
+const isRemembered = () => {
+  try {
+    return localStorage.getItem(ME_KEY) !== null;
+  } catch {
+    return false;
+  }
+};
 let lastVarietySwaps = 0;
 let who: Who = NO_WHO;
 const faceThumbs = new Map<string, string>();
@@ -179,7 +216,7 @@ function scheduleRefresh() {
   }, 400);
 }
 
-function startPeople(): Promise<void> {
+function startPeople(onReady: () => void = () => {}): Promise<void> {
   visionJob?.cancel();
   const byId = new Map(photos.map((p) => [p.id, p]));
   const t0 = performance.now();
@@ -192,6 +229,7 @@ function startPeople(): Promise<void> {
       scheduleRefresh();
     },
     (done, total) => (el.peopleStatus.textContent = `Finding people… ${done} of ${total}`),
+    onReady,
   );
   visionJob = job;
   return job.done.then(({ failed, error, warnings }) => {
@@ -229,8 +267,9 @@ function startScenes() {
   const byId = new Map(photos.map((p) => [p.id, p]));
   const t0 = performance.now();
   el.sceneStatus.textContent = 'Getting the scene finder ready…';
+  // Burst alternates can't be picked (unless swapped in by hand), so they don't need a scene.
   const job = findScenes(
-    photos,
+    photos.filter((p) => analysis?.verdicts.get(p.id)?.status !== 'alternate'),
     (id, scene) => {
       const p = byId.get(id);
       if (p) {
@@ -261,6 +300,8 @@ function startScenes() {
   });
 }
 
+el.meRememberBox?.addEventListener('change', () => rememberMe(el.meRememberBox.checked));
+
 // ---- Friends (M4b): who recurs across the album ---------------------------------
 
 function updateFriends() {
@@ -272,12 +313,13 @@ function updateFriends() {
     });
   }
   persons = clusterPeople(faces);
+  meId = findMe(persons, meCentroid)?.id ?? null;
   const byPhoto = new Map<string, string[]>();
   for (const person of persons) {
-    if (!person.friend) continue;
+    if (!person.friend && person.id !== meId) continue;
     for (const id of person.photoIds) byPhoto.set(id, [...(byPhoto.get(id) ?? []), person.id]);
   }
-  who = { friends: (p) => byPhoto.get(p.id) ?? [], known: true };
+  who = { friends: (p) => byPhoto.get(p.id) ?? [], known: true, me: meId };
   faceThumbs.forEach((u) => URL.revokeObjectURL(u));
   faceThumbs.clear();
   void makeFaceThumbs().then(() => renderGrid());
@@ -286,7 +328,7 @@ function updateFriends() {
 /** Small square crop of each friend's biggest face (from the 640 px copy). */
 async function makeFaceThumbs() {
   const byId = new Map(photos.map((p) => [p.id, p]));
-  for (const person of persons.filter((x) => x.friend)) {
+  for (const person of persons.filter((x) => x.friend || x.id === meId)) {
     const ref = person.faces.reduce((a, b) => (b.size > a.size ? b : a));
     const photo = byId.get(ref.photoId);
     const box = photo?.people?.faces[ref.faceIndex]?.box;
@@ -302,30 +344,51 @@ async function makeFaceThumbs() {
   }
 }
 
+function setMe(person: Person | null) {
+  const remembered = isRemembered();
+  meCentroid = person ? centroid(person) : null;
+  if (remembered) rememberMe(!!person);
+  updateFriends();
+  clearResult();
+}
+
 function renderFriends(picks: Photo[]) {
-  const friends = persons.filter((p) => p.friend);
-  el.friends.hidden = !who.known || friends.length === 0;
+  const shownPeople = persons.filter((p) => p.friend || p.id === meId).sort((a, b) => Number(b.id === meId) - Number(a.id === meId));
+  el.friends.hidden = !who.known || shownPeople.length === 0;
   if (el.friends.hidden) return;
   const inReel = new Set(picks.map((p) => p.id));
-  const strangers = persons.filter((p) => !p.friend).length;
+  const strangers = persons.filter((p) => !p.friend && p.id !== meId).length;
   el.friendList.replaceChildren(
-    ...friends.map((f) => {
+    ...shownPeople.map((f) => {
       const li = document.createElement('li');
+      const isMe = f.id === meId;
       const shown = f.photoIds.filter((id) => inReel.has(id)).length;
-      li.className = shown ? 'friend' : 'friend is-missing';
+      li.className = `friend${shown ? '' : ' is-missing'}${isMe ? ' is-me' : ''}`;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'friend__btn';
+      btn.setAttribute('aria-pressed', String(isMe));
+      btn.title = isMe
+        ? `You. In ${f.photoIds.length} photo${f.photoIds.length === 1 ? '' : 's'}; ${shown} in the reel. Tap to unmark.`
+        : `In ${f.photoIds.length} photo${f.photoIds.length === 1 ? '' : 's'}; ${shown} in the reel. Tap if this is you.`;
+      btn.addEventListener('click', () => setMe(isMe ? null : f));
       const img = document.createElement('img');
-      img.alt = '';
+      img.alt = isMe ? 'You' : '';
       if (faceThumbs.has(f.id)) img.src = faceThumbs.get(f.id)!;
       const n = document.createElement('span');
-      n.textContent = `${shown}/${f.photoIds.length}`;
-      li.title = `In ${f.photoIds.length} photo${f.photoIds.length === 1 ? '' : 's'}; ${shown} in the reel.`;
-      li.append(img, n);
+      n.textContent = isMe ? `You ${shown}/${f.photoIds.length}` : `${shown}/${f.photoIds.length}`;
+      btn.append(img, n);
+      li.append(btn);
       return li;
     }),
   );
+  const friendCount = shownPeople.length - (meId ? 1 : 0);
   el.friendsNote.textContent =
-    `${friends.length} ${friends.length === 1 ? 'person' : 'people'} recognised across your photos (in reel / in album). ` +
-    (strangers ? `${strangers} one-off face${strangers === 1 ? '' : 's'} treated as strangers.` : '');
+    (meId ? '' : 'Tap your own face to mark yourself; you\'re usually behind the camera, so the reel will make sure you\'re in it. ') +
+    `${friendCount} ${friendCount === 1 ? 'person' : 'people'} recognised (in reel / in album).` +
+    (strangers ? ` ${strangers} one-off face${strangers === 1 ? '' : 's'} treated as strangers.` : '');
+  el.meRemember.hidden = !meId;
+  el.meRememberBox.checked = isRemembered();
 }
 
 el.clear.addEventListener('click', () => {

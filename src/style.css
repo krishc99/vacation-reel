@@ -186,6 +186,11 @@ h2 { margin: 0; font: 700 1.2rem/1.2 var(--font-display); }
 .friends { display: grid; gap: 6px; }
 .friends__list { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 10px; }
 .friend { display: grid; justify-items: center; gap: 2px; font: 500 0.68rem/1 var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.friend__btn { display: grid; justify-items: center; gap: 2px; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+.friend__btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 8px; }
+.friend.is-me img { box-shadow: 0 0 0 3px var(--warm); }
+.friend.is-me span { color: var(--fg); font-weight: 700; }
+.check--small { font-weight: 400; font-size: 0.82rem; color: var(--muted); }
 .friend img { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; background: var(--line); box-shadow: 0 0 0 2px var(--accent); }
 .friend.is-missing img { box-shadow: 0 0 0 2px var(--warm); opacity: 0.6; }
 
