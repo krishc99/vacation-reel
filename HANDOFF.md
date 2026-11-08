@@ -1,4 +1,4 @@
-# HANDOFF → Milestone 6 (fun modes) · vacation-reel · updated 2026-11-08
+# HANDOFF → Milestone 6 (fun modes); M7 done first (user's call) · vacation-reel · updated 2026-11-08
 Audience: AI agent. Terse by design. Original plan = final; don't reopen decisions unless user asks.
 
 ## 0. Project
@@ -140,6 +140,15 @@ Verified: real candid group photo → readings match the picture (2 looking down
 ## 7e+. Speed + "this is me" (after M5)
 - Speed (Krish: import→scenes too slow; 83 photos ≈ 3.3 min). Measured in browser (single-thread wasm): CLIP q4 450 ms/photo vs int8 180 ms (native 82 vs 69) → ship vision_model_quantized (89 MB) as models/clip-vit-b32-vision-int8.onnx. SFace int8 240 ms/face vs fp32 45 ms → ship fp32 (38.7 MB) as models/face_recognition_sface_2021dec.onnx. Scene finder starts when people models are loaded (onReady), runs in parallel (2 cores). Scenes skip burst alternates. 50-photo album pick→done 41 s → 16 s headless.
 - "Me": tap a face in the friends strip (button, aria-pressed) → meCentroid = mean embedding; findMe matches centroid ≥ 0.45 after every recluster; optional "Remember me on this device" stores the 128-d centroid in localStorage (vacation-reel.me), untick = delete. Who.me → slotScore +0.4 and ensureMe(): ≥ max(2, ceil(picks/5)) photos of me if available, swapping weakest non-me picks (never a friend's only photo). Me always listed first ("You").
+
+## 7g. Milestone 7 — DONE (before M6)
+```
+scoring.ts   SCORE_WEIGHTS Q .15 F .25 C .15 M .45 (plan start .20/.25/.20/.35; Krish: people > food/scenery; aesthetic rates coffee 7.1 vs group 5.7; blur already gated). Raw → album percentiles. F: people photo 0.5+0.5·(½ passing/expected + ½ worst face) else 0.5·Σ CLIP probs of scenic classes (food → ~0). C: LAION aesthetic (src/analysis/aesthetic.json from scripts/aesthetic.py, sa_0_4_vit_b_32_linear MIT; .pth zip read w/o torch) − 0.5 if someone cut off. M: .45·friends/4 + .15·you + .15·log burst size + .15·highlight (CLIP vs sceneLabels.json "highlights", cos .22→.30) + .10·first of chapter
+chapters.ts  new chapter if gap > 2 h or > 1.5 km from chapter anchor (GPS both). Never CLIP
+reel.ts      chooseReel: allocate slots ∝ sum of top-3 scores (min 1, largest remainder, overflow to non-full chapters); pickChapter MMR: v = score − 0.6·max(0,(sim−0.6)/0.4) + 0.15·new friends; people first (near-repeat people photos, CLIP ≥ 0.9, don't block), one ESTABLISHING (scenery/landmark/city/sunset) shot per chapter with ≥ 3 slots, food ≤ max(1, 10 %) unless nothing else; then coverFriends + ensureMe. sequence: chapters chronological, orderChapter beam (width 12): +0.6 non-establishing first when one exists, +1 third same scene in a row, +0.3 third same group/solo/none, +0.35 per earlier photo jumped; then hook = best score first, finale = best M last
+main.ts      currentPlan → scorePhotos + chooseReel (selectPhotos kept for tests/fallback logic). Tile tooltip shows score parts + highlight. Summary mentions chapters.
+```
+Verified: 70 unit tests (chapters split by gap/distance, slots favour stronger chapter, MMR drops near-repeat, food ≤ 1, near-chronological order, hook/finale/establishing). E2E 50-photo album: hook = top-score people photo, finale = highest moment, order chronological with small swaps, near-repeat cam shot dropped. NOT tuned on real albums yet.
 
 ## 7f. Milestone 6 scope — fun modes (plan)
 Funny (jawOpen/mouthPucker/cheekPuff/eyeWide*/browInnerUp high; wink OK, half-closed both = blink), Laugh (eyes closed + big smile + open jaw), Scenic from behind (shoulders, no nose/eyes; judge scenery sharpness + framing, people small), Jump/arms up (wrists above head; highest body frame in burst). Intentional vs accidental: shared or held deviations intentional; one person in one frame accidental. A burst can yield several keepers (one per mode). Mix ~1 fun per 4–5 classic, spread out (M7 sequencing).

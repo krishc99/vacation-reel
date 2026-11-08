@@ -19,7 +19,10 @@ import { maxPhotosForMusic, planMusicTimeline, songParts, type SongStart } from 
 import { renderReel, type RenderJob } from './render/renderer';
 import { frameFor } from './render/crop';
 import { buildTimeline, timelineDuration } from './render/timeline';
-import { NO_WHO, selectPhotos, slotScore, type Who } from './selection';
+import { NO_WHO, type Who } from './selection';
+import { chooseReel } from './selection/reel';
+import { chapters } from './analysis/chapters';
+import { scorePhotos, type PhotoScore } from './analysis/scoring';
 import { centroid, clusterPeople, findMe, type FaceRef, type Person } from './analysis/friends';
 import { DEFAULT_SETTINGS, SHAPE_SIZE, type Clip, type Photo, type ReelSettings, type Shape } from './types';
 import { megabytes, shotTime, shotTimeFull, timecode } from './ui/format';
@@ -202,7 +205,8 @@ const isRemembered = () => {
     return false;
   }
 };
-let lastVarietySwaps = 0;
+let lastScores = new Map<string, PhotoScore>();
+let lastChapters = 0;
 let who: Who = NO_WHO;
 const faceThumbs = new Map<string, string>();
 
@@ -446,10 +450,18 @@ function currentPlan(): Plan {
     ? maxPhotosForMusic(song.beats, settings, songStart, songPart)
     : Math.floor(settings.maxSeconds / settings.secondsPerPhoto);
   const a = analysis;
-  // M5: among people photos, cleaner faces (eyes open, facing camera…) win slots.
-  const score = (p: Photo) => slotScore(p, a.verdicts.get(p.id)?.q ?? 0, who) + 0.3 * (a.verdicts.get(p.id)?.faceRank?.worst ?? 0);
-  const { picks, droppedForLength, varietySwaps } = selectPhotos(candidates, max, score, who);
-  lastVarietySwaps = varietySwaps;
+  // M7: one score per photo (Q, F, C, M) → chapters → per-chapter MMR → friends/you → order.
+  const burstOf = new Map(a.bursts.flatMap((b) => b.photoIds.map((id) => [id, b.photoIds.length] as const)));
+  const chapterStarts = new Set(chapters(candidates).map((c) => c[0]));
+  lastScores = scorePhotos(candidates, {
+    verdicts: a.verdicts,
+    who,
+    burstSize: (p) => burstOf.get(p.id) ?? 1,
+    firstOfChapter: (p) => chapterStarts.has(p.id),
+  });
+  const reel = chooseReel(candidates, max, lastScores, who);
+  const { picks, droppedForLength } = reel;
+  lastChapters = reel.chapters;
   const ids = picks.map((p) => p.id);
   if (song && ids.length) {
     const m = planMusicTimeline(ids, song.beats, settings, songStart, songPart);
@@ -512,7 +524,7 @@ function renderGrid() {
     `${plan.picks.length} in the reel · ${timecode(duration)}${song ? ` cut to ${Math.round(song.beats.bpm)} BPM` : ''}`,
   ].filter(Boolean);
   let summary = parts.join(' · ') + '.';
-  if (lastVarietySwaps > 0) summary += ` ${lastVarietySwaps} near-repeat shot${lastVarietySwaps === 1 ? '' : 's'} swapped for different scenes.`;
+  if (lastChapters > 1) summary += ` ${lastChapters} chapters (by time and place), each getting slots by how strong its photos are; order opens on the strongest photo and ends on the biggest moment.`;
   if (plan.droppedForLength > 0) {
     const why = song
       ? plan.coversSection
@@ -610,7 +622,12 @@ function tile(p: Photo, state: ReturnType<typeof tileState>, start: number | und
 
   const note = v.onlyOfMoment && state === 'keeper' ? ` Kept although ${reasons}: only shot of this moment.` : '';
   const why = cls === 'is-rejected' ? ` Set aside: ${reasons}.` : '';
-  const sceneTxt = p.scene ? ` ${SCENE_LABEL[p.scene.label]}.` : '';
+  const sc = lastScores.get(p.id);
+  const sceneTxt =
+    (p.scene ? ` ${SCENE_LABEL[p.scene.label]}.` : '') +
+    (sc
+      ? ` Score ${Math.round(sc.score * 100)} (quality ${Math.round(sc.Q * 100)}, faces/scenery ${Math.round(sc.F * 100)}, looks ${Math.round(sc.C * 100)}, moment ${Math.round(sc.M * 100)})${sc.highlight ? `, ${sc.highlight}` : ''}.`
+      : '');
   const fr = v.faceRank;
   const faceTxt = fr
     ? fr.issues.length

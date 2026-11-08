@@ -29,12 +29,19 @@ CLASSES = {
     "junk": ["a screenshot of a phone screen", "a screenshot of a chat conversation", "a screenshot of text messages", "a photo of a document", "a photo of a receipt", "a photo of a ticket or boarding pass", "a photo of a menu", "a QR code", "a page of printed text"],
 }
 
-def main(clip_dir: str):
-    tok = Tokenizer.from_file(os.path.join(clip_dir, "tokenizer.json"))
-    sess = ort.InferenceSession(os.path.join(clip_dir, "onnx", "text_model_quantized.onnx"))
-    names = [i.name for i in sess.get_inputs()]
+# Plan's highlight prompts for the "moment" score M (sunset, celebration, jump, landmark…).
+HIGHLIGHTS = {
+    "sunset": ["a beautiful sunset", "a dramatic sky at golden hour"],
+    "celebration": ["friends celebrating together", "people cheering and raising their glasses", "a birthday celebration"],
+    "jump": ["people jumping in the air", "a person jumping with arms up"],
+    "landmark": ["a famous landmark", "a breathtaking view from the top"],
+    "fireworks": ["fireworks in the night sky"],
+    "adventure": ["an exciting adventure activity", "people on a boat at sea", "riding in the desert dunes"],
+}
+
+def embed_classes(tok, sess, names, classes):
     out = {}
-    for cls, prompts in CLASSES.items():
+    for cls, prompts in classes.items():
         embs = []
         for p in prompts:
             ids = tok.encode(p).ids[:77]
@@ -45,9 +52,17 @@ def main(clip_dir: str):
             embs.append(e / np.linalg.norm(e))
         m = np.mean(embs, axis=0)
         out[cls] = [round(float(x), 6) for x in m / np.linalg.norm(m)]
+    return out
+
+def main(clip_dir: str):
+    tok = Tokenizer.from_file(os.path.join(clip_dir, "tokenizer.json"))
+    sess = ort.InferenceSession(os.path.join(clip_dir, "onnx", "text_model_quantized.onnx"))
+    names = [i.name for i in sess.get_inputs()]
+    out = embed_classes(tok, sess, names, CLASSES)
+    highlights = embed_classes(tok, sess, names, HIGHLIGHTS)
     dest = os.path.join(os.path.dirname(__file__), "..", "src", "analysis", "sceneLabels.json")
     with open(dest, "w") as f:
-        json.dump({"model": "Xenova/clip-vit-base-patch32", "classes": out}, f)
+        json.dump({"model": "Xenova/clip-vit-base-patch32", "classes": out, "highlights": highlights}, f)
     print("wrote", dest, len(out), "classes")
 
 if __name__ == "__main__":

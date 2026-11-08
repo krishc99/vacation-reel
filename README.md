@@ -5,7 +5,7 @@ Photos never leave the device: no backend, no paid APIs.
 
 ## Status
 
-**Milestone 5 — done** (best shot in each burst).
+**Milestone 7 — done** (scoring, chapters, variety, ordering). M6 fun modes next.
 
 - M1: upload → EXIF time sort → 1.5 s per photo → center crop → WebCodecs MP4 → download / share.
 - M2: HEIC (libheif wasm, lazy-loaded) · 640px + 256px downscales · content-independent subject sharpness, exposure, noise · dHash bursts (best frame kept, others shown as alternates) · quality gate (photos with a real defect, i.e. blurry / very dark / blown out, are set aside when the same moment has a clean shot) · tap a tile to swap / remove / bring back.
@@ -74,7 +74,7 @@ Firefox desktop 130+ has WebCodecs; Firefox Android does not. Unsupported browse
 4. CLIP + face identity
 5. ✅ Classic best-photo picking
 6. Fun modes
-7. Scoring + sequencing
+7. ✅ Scoring + sequencing
 8. Smart crop, Ken Burns, captions
 9. Preview/edit screen
 10. Capacitor app

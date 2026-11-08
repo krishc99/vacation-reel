@@ -62,7 +62,7 @@ export function slotScore(p: Photo, quality: number, who: Who = NO_WHO): number 
  * the reel keeps at least max(2, 1 in 5 photos) of you, if the album has them,
  * swapping out the weakest picks without you (never a friend's only photo).
  */
-function ensureMe(all: Photo[], picks: Set<Photo>, score: (p: Photo) => number, who: Who): number {
+export function ensureMe(all: Photo[], picks: Set<Photo>, score: (p: Photo) => number, who: Who): number {
   const me = who.me;
   if (!me) return 0;
   const mine = (p: Photo) => who.friends(p).includes(me);
@@ -103,7 +103,7 @@ function spread(photos: Photo[], slots: number, score: (p: Photo) => number): Ph
  * missing friend (most-photographed first), swap in their best photo for the
  * weakest pick whose removal doesn't drop another friend.
  */
-function coverFriends(all: Photo[], picks: Set<Photo>, score: (p: Photo) => number, who: Who): number {
+export function coverFriends(all: Photo[], picks: Set<Photo>, score: (p: Photo) => number, who: Who): number {
   if (!who.known) return 0;
   const count = new Map<string, number>();
   const covered = () => {
@@ -139,7 +139,7 @@ function coverFriends(all: Photo[], picks: Set<Photo>, score: (p: Photo) => numb
  */
 export const FOOD_SHARE = 0.2;
 
-const isFood = (p: Photo) => p.scene?.label === 'food';
+export const isFood = (p: Photo) => p.scene?.label === 'food';
 
 /** Non-people slots: scenery-type photos first, food capped, all spread over the trip. */
 function fillOthers(others: Photo[], slots: number, score: (p: Photo) => number): Photo[] {
@@ -154,7 +154,7 @@ function fillOthers(others: Photo[], slots: number, score: (p: Photo) => number)
 /** CLIP image similarity at or above which two photos count as "the same shot again". */
 export const SIMILAR = 0.9;
 
-function clipSim(a: Photo, b: Photo): number {
+export function clipSim(a: Photo, b: Photo): number {
   const x = a.scene?.embedding;
   const y = b.scene?.embedding;
   if (!x || !y || x.length !== y.length) return 0;
