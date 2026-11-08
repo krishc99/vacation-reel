@@ -20,7 +20,7 @@ describe('planMusicTimeline', () => {
   it('cuts only on detected beats, starts on a downbeat, stays within 15–30 s', () => {
     for (const bpm of [70, 87, 100, 124, 140, 174]) {
       const a = grid(bpm, 180);
-      const n = Math.min(18, maxPhotosForMusic(a, DEFAULT_SETTINGS));
+      const n = Math.min(18, maxPhotosForMusic(a, DEFAULT_SETTINGS, 'best'));
       const plan = planMusicTimeline(ids(n), a, DEFAULT_SETTINGS, 'best');
       const startIdx = a.beats.indexOf(plan.audioStart);
       expect(startIdx % 4).toBe(a.downbeatPhase);
@@ -32,6 +32,11 @@ describe('planMusicTimeline', () => {
       // Middle photos 0.5–1.5 s; opener/finale hold longer.
       for (const c of plan.clips.slice(1, -1)) expect(c.duration).toBeLessThanOrEqual(1.5 + 1e-6);
       expect(plan.clips[0].duration).toBeGreaterThan(plan.clips[1].duration);
+      // The highlight (chorus) lands exactly on the cut to photo 2, after a 1+ bar lead-in.
+      if (plan.highlight !== null && plan.highlight > plan.audioStart) {
+        expect(Math.abs(plan.audioStart + plan.clips[1].start - plan.highlight)).toBeLessThan(1e-9);
+        expect(plan.highlight - plan.audioStart).toBeGreaterThanOrEqual(4 * (60 / bpm) - 1e-6);
+      }
       expect(plan.duration).toBeLessThanOrEqual(30 + 1e-6);
       expect(plan.duration).toBeGreaterThanOrEqual(15 - 1e-6);
     }
@@ -40,15 +45,17 @@ describe('planMusicTimeline', () => {
   it('"best" starts in the most intense section; "start" at the first downbeat', () => {
     const a = grid(120, 180, 1, 60, 100);
     const best = planMusicTimeline(ids(15), a, DEFAULT_SETTINGS, 'best');
-    expect(best.audioStart).toBeGreaterThanOrEqual(59);
-    expect(best.audioStart).toBeLessThan(75);
+    expect(best.highlight!).toBeGreaterThanOrEqual(59);
+    expect(best.highlight!).toBeLessThan(75);
+    // Lead-in: ~3 s → 2 bars at 120 BPM = 4 s before the highlight.
+    expect(best.highlight! - best.audioStart).toBeCloseTo(4, 6);
     const start = planMusicTimeline(ids(15), a, DEFAULT_SETTINGS, 'start');
     expect(start.audioStart).toBe(a.beats[1]);
   });
 
   it('caps photos so the reel fits 30 s', () => {
     const a = grid(124, 180);
-    const max = maxPhotosForMusic(a, DEFAULT_SETTINGS);
+    const max = maxPhotosForMusic(a, DEFAULT_SETTINGS, 'best');
     expect(planMusicTimeline(ids(max), a, DEFAULT_SETTINGS, 'best').duration).toBeLessThanOrEqual(30);
   });
 
