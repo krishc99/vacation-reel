@@ -1,5 +1,4 @@
 /// <reference lib="webworker" />
-import { decodeImage } from '../import/decode';
 import { centerCoverCrop } from '../render/crop';
 import { createEncoder, type FrameEncoder } from '../render/encoder';
 import { timelineDuration } from '../render/timeline';
@@ -15,8 +14,8 @@ function post(msg: RenderResponse, transfer: Transferable[] = []) {
  * Decodes one photo and returns it already cropped to the target aspect and
  * scaled to output size, so only one output-sized bitmap is alive at a time.
  */
-async function loadFramed(file: File, w: number, h: number): Promise<ImageBitmap> {
-  const full = await decodeImage(file);
+async function loadFramed(image: Blob, w: number, h: number): Promise<ImageBitmap> {
+  const full = await createImageBitmap(image);
   try {
     const c = centerCoverCrop(full.width, full.height, w, h);
     return await createImageBitmap(full, c.sx, c.sy, c.sw, c.sh, {
@@ -31,7 +30,7 @@ async function loadFramed(file: File, w: number, h: number): Promise<ImageBitmap
 
 self.onmessage = async (e: MessageEvent<RenderRequest>) => {
   if (e.data.type !== 'render') return;
-  const { clips, files, settings: s, audio } = e.data;
+  const { clips, images, settings: s, audio } = e.data;
   let enc: FrameEncoder | null = null;
   try {
     enc = await createEncoder(s, audio);
@@ -41,7 +40,7 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
     let frame = 0;
 
     for (const clip of clips) {
-      const bmp = await loadFramed(files[clip.photoId], s.width, s.height);
+      const bmp = await loadFramed(images[clip.photoId], s.width, s.height);
       ctx.fillStyle = '#000';
       ctx.fillRect(0, 0, s.width, s.height);
       ctx.drawImage(bmp, 0, 0);
