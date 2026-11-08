@@ -29,8 +29,10 @@ export function renderReel(
       }
     };
     worker.onerror = (e) => {
+      e.preventDefault();
       worker.terminate();
-      reject(new Error(e.message || 'Render worker failed'));
+      const where = e.filename ? ` (${e.filename.split('/').pop()}:${e.lineno})` : '';
+      reject(new Error(`Video encoder stopped: ${e.message || 'no message'}${where}`));
     };
   });
 

@@ -22,6 +22,7 @@ const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as 
 const el = {
   unsupported: $('unsupported'),
   spec: $('spec'),
+  build: $('build'),
   drop: $<HTMLLabelElement>('drop'),
   fileInput: $<HTMLInputElement>('file-input'),
   importStatus: $('import-status'),
@@ -51,6 +52,10 @@ let job: RenderJob | null = null;
 let resultUrl: string | null = null;
 let resultFile: File | null = null;
 
+// ---- Build stamp (confirms which version is live) ------------------------------
+
+el.build.textContent = `Build ${__BUILD__}`;
+
 // ---- Capability check --------------------------------------------------------
 
 if (typeof VideoEncoder === 'undefined' || typeof OffscreenCanvas === 'undefined') {
@@ -68,7 +73,7 @@ async function addFiles(list: FileList | File[]) {
   el.importStatus.textContent = `Reading 0 of ${files.length}…`;
   const t0 = performance.now();
   try {
-    const { photos: added, skipped } = await importPhotos(files, (done, total) => {
+    const { photos: added, skipped, fallbackReason } = await importPhotos(files, (done, total) => {
       el.importStatus.textContent = `Reading ${done} of ${total}…`;
     });
     photos = sortByTime([...photos, ...added]);
@@ -76,7 +81,9 @@ async function addFiles(list: FileList | File[]) {
     // Burst ids are positional, so keeper picks don't survive a re-analysis.
     overrides.keeper.clear();
     const secs = ((performance.now() - t0) / 1000).toFixed(1);
-    el.importStatus.textContent = `${added.length} photo${added.length === 1 ? '' : 's'} added in ${secs}s.`;
+    el.importStatus.textContent =
+      `${added.length} photo${added.length === 1 ? '' : 's'} added in ${secs}s.` +
+      (fallbackReason ? ` Background reader unavailable on this device (${fallbackReason}), so photos were read directly; the page may pause briefly.` : '');
     showSkipped(skipped);
     clearResult();
     renderGrid();

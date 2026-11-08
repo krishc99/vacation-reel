@@ -34,8 +34,9 @@ src/types.ts                Photo{…, detail:Blob(640 JPEG), stats:QualityStats
 src/main.ts                 state: photos, analysis, overrides. currentPlan() = candidateIds → selectPhotos → buildTimeline. Tile tap: alt→keeper, keeper→exclude, rejected→include, excluded→restore
 src/import/decode.ts        decodeImage(file): createImageBitmap → HEIF brand sniff → libheif (primary image, orientation applied). Used by BOTH workers
 src/import/exif.ts          readExif(file,isHeif): exifr; if HEIF & no date → regex "Exif\0\0(MM|II)" → exifr on TIFF slice
-src/import/importer.ts      pool of ≤2 import workers (memory cap), round-robin; returns time-sorted Photo[]
-src/workers/import.worker.ts  decode → 640 canvas (gray: sharpness, noise; JPEG blob kept) → close full → 256 canvas (gray: exposure, dHash; thumb)
+src/import/importer.ts      worker pool (1 on phones, ≤2 desktop), PULL model: worker posts 'ready', then 1 file/msg. Crash mid-photo → respawn, retry once, then skip w/ error text. Worker can't start (error before 'ready') → main-thread fallback (status line says so)
+src/import/process.ts       processPhoto(id,file): shared pipeline for worker + main-thread fallback
+src/workers/import.worker.ts  thin wrapper around processPhoto: decode → 640 canvas (gray: sharpness, noise; JPEG blob kept) → close full → 256 canvas (gray: exposure, dHash; thumb). NO willReadFrequently (forces CPU canvas w/ full-res readback)
 src/analysis/pixels.ts      toGray, resizeBox, median
 src/analysis/quality.ts     subjectSharpness(gray, regions?) = mean of top-3 of 8×8 tile Laplacian variances (bokeh-safe); regions = M4 face boxes (normalized). noiseSigma = MAD of 3×3 residual on flattest 25% tiles. exposure = mean, clip<10, clip>245
 src/analysis/dhash.ts       9×8 dHash as [hi,lo] u32; hamming
@@ -56,6 +57,7 @@ Q here = plan's Q term (subject sharpness, exposure, noise), already percentile-
 NOT verified: real iPhone HEIC (exifr fallback tested only on pillow-heif files), real-photo threshold tuning, Safari/iOS perf, 48MP decodes.
 
 ## 6. Known limits / tuning notes
+- OPEN BUG (M2 on real Android Chrome): "Import worker failed" (empty error = worker load failure or crash) even for 1 photo; laptop Chrome + Pixel emulation fine. Hardened build adds: exact error text, crash retry, main-thread fallback, footer build stamp (`__BUILD__` = UTC time · GITHUB_SHA). Root cause not yet confirmed — check what the status line / skipped list says on device. Suspects: willReadFrequently CPU canvas on huge (50–200MP) Android photos; stale cached index.html after deploy (GH Pages max-age 600) pointing to removed worker hash.
 - Sharpness at 640px misses mild blur of 12MP originals (needs ~blur r≥15 at full res to register). If real albums show misses: measure top tile at full-res crop.
 - Burst thresholds untuned on real photos (BURST_DEFAULTS, GATE_DEFAULTS are exported constants).
 - Keeper overrides cleared when photos are added (burst ids positional).

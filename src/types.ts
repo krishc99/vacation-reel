@@ -60,7 +60,7 @@ export interface Clip {
 
 // ---- Worker protocols -------------------------------------------------------
 
-export type ImportRequest = { type: 'import'; files: { id: string; file: File }[] };
+export type ImportRequest = { type: 'photo'; id: string; file: File };
 
 export type ImportResponse =
   | {
@@ -78,7 +78,8 @@ export type ImportResponse =
       dhash: DHash;
     }
   | { type: 'skipped'; id: string; name: string; reason: string }
-  | { type: 'done' };
+  | { type: 'ready' }
+  | { type: 'fatal'; message: string };
 
 export type RenderRequest = {
   type: 'render';

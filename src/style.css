@@ -230,6 +230,8 @@ h2 { margin: 0; font: 700 1.2rem/1.2 var(--font-display); }
   .result__video { max-width: 280px; justify-self: center; }
 }
 
+.foot { color: var(--muted); font: 400 0.72rem/1.4 var(--font-mono); border-top: 1px solid var(--line); padding-top: 12px; }
+
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
