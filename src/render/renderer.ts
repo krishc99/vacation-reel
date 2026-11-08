@@ -38,9 +38,9 @@ export function renderReel(
     };
   });
 
-  const files: Record<string, File> = {};
-  for (const c of clips) files[c.photoId] = photos.find((p) => p.id === c.photoId)!.file;
-  const req: RenderRequest = { type: 'render', clips, files, settings, audio };
+  const images: Record<string, Blob> = {};
+  for (const c of clips) images[c.photoId] = photos.find((p) => p.id === c.photoId)!.master;
+  const req: RenderRequest = { type: 'render', clips, images, settings, audio };
   worker.postMessage(req, audio ? [audio.left.buffer, audio.right.buffer] : []);
 
   return {

@@ -1,4 +1,5 @@
 import type { BeatAnalysis } from '../audio/beats';
+import { rankSongParts, type SongPart } from '../audio/structure';
 import type { Clip, ReelSettings } from '../types';
 
 export type SongStart = 'best' | 'start';
@@ -65,35 +66,27 @@ function beatAt(a: BeatAnalysis, i: number): number {
   return a.beats[a.beats.length - 1] + (i - a.beats.length + 1) * P;
 }
 
-function chooseStartBeat(a: BeatAnalysis, span: number, mode: SongStart): number {
-  const downs: number[] = [];
-  for (let i = a.downbeatPhase; i < a.beats.length; i += 4) downs.push(i);
-  if (!downs.length) return 0;
-  if (mode === 'start') return downs[0];
-  const fitting = downs.filter((i) => i + span <= a.beatEnergy.length);
-  if (!fitting.length) return downs[0];
-  const pre = [0];
-  for (const e of a.beatEnergy) pre.push(pre[pre.length - 1] + e);
-  let best = fitting[0];
-  let bestE = -Infinity;
-  for (const i of fitting) {
-    const e = (pre[i + span] - pre[i]) / span;
-    if (e > bestE + 1e-9) {
-      bestE = e;
-      best = i;
-    }
-  }
-  return best;
+/** Ranked candidate start points ("best part" suggestions) for n photos. */
+export function songParts(a: BeatAnalysis, n: number, s: ReelSettings): SongPart[] {
+  const k = chooseK(n, beatPeriod(a), s);
+  return rankSongParts(a.features, a.downbeatPhase, beatsNeeded(n, k), a.duration, a.beats);
+}
+
+function chooseStartBeat(a: BeatAnalysis, n: number, s: ReelSettings, mode: SongStart, part: number): number {
+  const first = a.downbeatPhase < a.beats.length ? a.downbeatPhase : 0;
+  if (mode === 'start') return first;
+  const parts = songParts(a, n, s);
+  if (!parts.length) return first;
+  return parts[Math.min(part, parts.length - 1)].beat;
 }
 
 /** Every cut lands on a detected beat; the reel starts on a downbeat. */
-export function planMusicTimeline(photoIds: string[], a: BeatAnalysis, s: ReelSettings, mode: SongStart): MusicPlan {
+export function planMusicTimeline(photoIds: string[], a: BeatAnalysis, s: ReelSettings, mode: SongStart, part = 0): MusicPlan {
   const n = photoIds.length;
   const P = beatPeriod(a);
   const k = chooseK(n, P, s);
   const hold = k * MUSIC_DEFAULTS.holdFactor;
-  const span = beatsNeeded(n, k);
-  const start = chooseStartBeat(a, span, mode);
+  const start = chooseStartBeat(a, n, s, mode, part);
   const t0 = beatAt(a, start);
 
   const clips: Clip[] = [];

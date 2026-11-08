@@ -8,7 +8,10 @@ function grid(bpm: number, seconds: number, phase = 1, loudFrom = 60, loudTo = 9
   const beats: number[] = [];
   for (let t = 0.2; t < seconds; t += P) beats.push(t);
   const beatEnergy = beats.slice(1).map((t) => (t >= loudFrom && t < loudTo ? 1 : 0.2));
-  return { bpm, beats, downbeatPhase: phase, beatEnergy, duration: seconds };
+  const intensity = beats.slice(1).map((t) => (t >= loudFrom && t < loudTo ? 1 : -1));
+  const chroma = intensity.map(() => [1, ...new Array(11).fill(0)]);
+  const novelty = beats.map(() => 0);
+  return { bpm, beats, downbeatPhase: phase, beatEnergy, duration: seconds, features: { chroma, intensity, novelty } };
 }
 
 const ids = (n: number) => Array.from({ length: n }, (_, i) => `p${i}`);
@@ -34,7 +37,7 @@ describe('planMusicTimeline', () => {
     }
   });
 
-  it('"best" starts in the loudest section; "start" at the first downbeat', () => {
+  it('"best" starts in the most intense section; "start" at the first downbeat', () => {
     const a = grid(120, 180, 1, 60, 100);
     const best = planMusicTimeline(ids(15), a, DEFAULT_SETTINGS, 'best');
     expect(best.audioStart).toBeGreaterThanOrEqual(59);
