@@ -38,7 +38,12 @@ describe('planMusicTimeline', () => {
         expect(plan.highlight - plan.audioStart).toBeGreaterThanOrEqual(4 * (60 / bpm) - 1e-6);
       }
       expect(plan.duration).toBeLessThanOrEqual(30 + 1e-6);
-      expect(plan.duration).toBeGreaterThanOrEqual(15 - 1e-6);
+      expect(plan.duration).toBeGreaterThanOrEqual(12 - 1e-6);
+      // Ends on a whole 2-bar phrase measured from the highlight / start.
+      const ref = plan.highlight ?? plan.audioStart;
+      const endIdx = a.beats.findIndex((b) => Math.abs(b - (plan.audioStart + plan.duration)) < 1e-6);
+      const refIdx = a.beats.findIndex((b) => Math.abs(b - ref) < 1e-6);
+      if (endIdx >= 0) expect((endIdx - refIdx) % 8).toBe(0);
     }
   });
 

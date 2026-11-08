@@ -1,4 +1,6 @@
+import { subjectBoxes } from '../analysis/people';
 import type { ReelAudio } from '../audio/song';
+import type { Subject } from './crop';
 import type { Clip, Photo, ReelSettings, RenderRequest, RenderResponse } from '../types';
 import RenderWorker from '../workers/render.worker?worker';
 
@@ -39,8 +41,13 @@ export function renderReel(
   });
 
   const images: Record<string, Blob> = {};
-  for (const c of clips) images[c.photoId] = photos.find((p) => p.id === c.photoId)!.master;
-  const req: RenderRequest = { type: 'render', clips, images, settings, audio };
+  const subjects: Record<string, Subject[]> = {};
+  for (const c of clips) {
+    const p = photos.find((x) => x.id === c.photoId)!;
+    images[c.photoId] = p.master;
+    subjects[c.photoId] = subjectBoxes(p.people);
+  }
+  const req: RenderRequest = { type: 'render', clips, images, subjects, settings, audio };
   worker.postMessage(req, audio ? [audio.left.buffer, audio.right.buffer] : []);
 
   return {
