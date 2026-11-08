@@ -137,18 +137,23 @@ h2 { margin: 0; font: 700 1.2rem/1.2 var(--font-display); }
   font: inherit;
 }
 .tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
-.tile img {
+.tile__frame {
+  position: relative;
+  display: block;
   width: 100%;
   max-width: 100%;
   aspect-ratio: 9 / 16;
-  object-fit: cover;
+  overflow: hidden;
   border-radius: 6px;
   background: var(--line);
-  display: block;
   transition: opacity 0.15s, filter 0.15s;
 }
-.tile.is-used img { box-shadow: 0 0 0 2px var(--accent); }
+.tile__frame img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.tile__frame.is-fit .tile__img { object-fit: contain; }
+.tile__bg { filter: blur(6px) brightness(0.72); transform: scale(1.15); }
+.tile.is-used .tile__frame { box-shadow: 0 0 0 2px var(--accent); }
 .tile__tc {
+  z-index: 1;
   position: absolute;
   top: 5px;
   left: 5px;
@@ -172,10 +177,10 @@ h2 { margin: 0; font: 700 1.2rem/1.2 var(--font-display); }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.tile.is-alternate img, .tile.is-capped img { opacity: 0.45; }
-.tile.is-rejected img, .tile.is-excluded img { opacity: 0.3; filter: grayscale(1); }
+.tile.is-alternate .tile__frame, .tile.is-capped .tile__frame { opacity: 0.45; }
+.tile.is-rejected .tile__frame, .tile.is-excluded .tile__frame { opacity: 0.3; filter: grayscale(1); }
 .tile.is-rejected .tile__tc { background: var(--warm); color: #1a0d07; }
-.tile:hover img { opacity: 1; filter: none; }
+.tile:hover .tile__frame { opacity: 1; filter: none; }
 
 /* Shape toggle */
 .seg { display: inline-flex; flex-wrap: wrap; gap: 4px; margin: 0; padding: 4px; border: 1.5px solid var(--line); border-radius: 999px; background: var(--surface); justify-self: start; }
@@ -188,7 +193,7 @@ h2 { margin: 0; font: 700 1.2rem/1.2 var(--font-display); }
 
 /* Horizontal shape: tiles and preview follow the export aspect */
 [data-shape='horizontal'] .grid { --tile-w: 148px; }
-[data-shape='horizontal'] .tile img { aspect-ratio: 16 / 9; }
+[data-shape='horizontal'] .tile__frame { aspect-ratio: 16 / 9; }
 [data-shape='horizontal'] .result { grid-template-columns: 1fr; }
 [data-shape='horizontal'] .result__video { aspect-ratio: 16 / 9; max-width: 100%; }
 

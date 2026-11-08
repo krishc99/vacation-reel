@@ -13,6 +13,7 @@ import { sortByTime } from './import/sort';
 import { excerpt, loadSong, type Song } from './audio/song';
 import { maxPhotosForMusic, planMusicTimeline, songParts, type SongStart } from './render/musicTimeline';
 import { renderReel, type RenderJob } from './render/renderer';
+import { frameFor } from './render/crop';
 import { buildTimeline, timelineDuration } from './render/timeline';
 import { selectPhotos } from './selection';
 import { DEFAULT_SETTINGS, SHAPE_SIZE, type Clip, type Photo, type ReelSettings, type Shape } from './types';
@@ -158,6 +159,7 @@ function setShape(shape: Shape) {
   document.documentElement.dataset.shape = shape;
   el.spec.textContent = `${settings.width}×${settings.height} · ${settings.fps} fps · H.264 MP4 · ${settings.minSeconds}–${settings.maxSeconds} s`;
   clearResult();
+  if (analysis) renderGrid();
 }
 document.querySelectorAll<HTMLInputElement>('input[name="shape"]').forEach((r) =>
   r.addEventListener('change', () => r.checked && setShape(r.value as Shape)),
@@ -172,22 +174,24 @@ interface Plan {
   droppedForLength: number;
   /** Song time at reel t = 0 when cutting to music. */
   audioStart: number | null;
+  /** Song time of the chorus the reel builds up to. */
+  highlight: number | null;
 }
 
 function currentPlan(): Plan {
-  if (!analysis) return { picks: [], clips: [], droppedForLength: 0, audioStart: null };
+  if (!analysis) return { picks: [], clips: [], droppedForLength: 0, audioStart: null, highlight: null };
   const byId = new Map(photos.map((p) => [p.id, p]));
   const candidates = candidateIds(analysis, overrides).map((id) => byId.get(id)!);
   const max = song
-    ? maxPhotosForMusic(song.beats, settings)
+    ? maxPhotosForMusic(song.beats, settings, songStart)
     : Math.floor(settings.maxSeconds / settings.secondsPerPhoto);
   const { picks, droppedForLength } = selectPhotos(candidates, max);
   const ids = picks.map((p) => p.id);
   if (song && ids.length) {
     const m = planMusicTimeline(ids, song.beats, settings, songStart, songPart);
-    return { picks, clips: m.clips, droppedForLength, audioStart: m.audioStart };
+    return { picks, clips: m.clips, droppedForLength, audioStart: m.audioStart, highlight: m.highlight };
   }
-  return { picks, clips: buildTimeline(ids, settings), droppedForLength, audioStart: null };
+  return { picks, clips: buildTimeline(ids, settings), droppedForLength, audioStart: null, highlight: null };
 }
 
 // ---- Grid ----------------------------------------------------------------------
@@ -280,10 +284,23 @@ function tile(p: Photo, state: ReturnType<typeof tileState>, start: number | und
   btn.className = `tile ${cls}`;
   btn.addEventListener('click', () => onTileTap(p.id));
 
+  // Preview the framing the export will use (cover crop, or whole photo on a blurred fill).
+  const fit = frameFor(p.width, p.height, settings.width, settings.height).mode === 'fit';
+  const frame = document.createElement('span');
+  frame.className = fit ? 'tile__frame is-fit' : 'tile__frame';
+  if (fit) {
+    const bg = document.createElement('img');
+    bg.className = 'tile__bg';
+    bg.src = p.thumbUrl;
+    bg.alt = '';
+    frame.append(bg);
+  }
   const img = document.createElement('img');
+  img.className = 'tile__img';
   img.src = p.thumbUrl;
   img.alt = p.name;
   img.loading = 'lazy';
+  frame.append(img);
 
   const tc = document.createElement('span');
   tc.className = 'tile__tc';
@@ -306,7 +323,7 @@ function tile(p: Photo, state: ReturnType<typeof tileState>, start: number | und
   const why = cls === 'is-rejected' ? ` Set aside: ${reasons}.` : '';
   btn.title = `${p.name} · ${shotTimeFull(p.takenAt)}.${why} ${action}.${note}`;
   btn.setAttribute('aria-label', `${p.name}, ${label}. ${action}.`);
-  btn.append(img, tc, cap);
+  btn.append(frame, tc, cap);
   return btn;
 }
 
@@ -315,7 +332,10 @@ function tile(p: Photo, state: ReturnType<typeof tileState>, start: number | und
 function updateSongParts(plan: Plan) {
   if (!song || !plan.picks.length || plan.audioStart === null) return;
   const total = songStart === 'best' ? songParts(song.beats, plan.picks.length, settings).length : 0;
-  const at = `starts ${timecode(plan.audioStart)}`;
+  const at =
+    plan.highlight !== null && plan.highlight > plan.audioStart
+      ? `chorus ${timecode(plan.highlight)} · lead-in from ${timecode(plan.audioStart)}`
+      : `starts ${timecode(plan.audioStart)}`;
   el.partLabel.textContent = songStart === 'best' && total ? `Suggestion ${Math.min(songPart, total - 1) + 1} of ${total} · ${at}` : `From the top · ${at}`;
   el.partPrev.hidden = el.partNext.hidden = songStart !== 'best';
   el.partPrev.disabled = songPart <= 0;
