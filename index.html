@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Vacation Reel</title>
+    <meta name="description" content="Turn vacation photos into an Instagram Reel (vertical or horizontal). Everything runs on your device." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=JetBrains+Mono:wght@400;500&display=swap"
+    />
+  </head>
+  <body>
+    <main class="wrap">
+      <header class="masthead">
+        <h1>Vacation Reel</h1>
+        <p class="lede">Drop in your trip photos and get a Reel back. Photos stay on this device; nothing is uploaded.</p>
+        <p id="spec" class="spec">1080×1920 · 30 fps · H.264 MP4 · 15–30 s</p>
+      </header>
+
+      <p id="unsupported" class="banner banner--error" hidden></p>
+
+      <section class="step" aria-labelledby="step-add">
+        <h2 id="step-add">Add photos</h2>
+        <label id="drop" class="drop" for="file-input">
+          <input id="file-input" type="file" accept="image/*,.heic,.heif" multiple />
+          <span class="drop__title">Choose photos or drop them here</span>
+          <span class="drop__hint">JPEG, PNG or WebP. About 10–20 photos makes a 15–30 s reel.</span>
+        </label>
+        <p id="import-status" class="status" aria-live="polite"></p>
+        <ul id="skipped" class="skipped" hidden></ul>
+      </section>
+
+      <section id="order-section" class="step" aria-labelledby="step-order" hidden>
+        <div class="step__head">
+          <h2 id="step-order">Order</h2>
+          <button id="clear" class="btn btn--quiet" type="button">Clear all</button>
+        </div>
+        <fieldset class="seg" aria-label="Video shape">
+          <label><input type="radio" name="shape" id="shape-vertical" value="vertical" checked /> <span>Vertical 9:16 <small>Reels</small></span></label>
+          <label><input type="radio" name="shape" id="shape-horizontal" value="horizontal" /> <span>Horizontal 16:9</span></label>
+        </fieldset>
+        <p id="order-summary" class="status"></p>
+        <ol id="grid" class="grid"></ol>
+      </section>
+
+      <section id="make-section" class="step" aria-labelledby="step-make" hidden>
+        <h2 id="step-make">Make the reel</h2>
+        <div class="actions">
+          <button id="make" class="btn btn--primary" type="button">Make reel</button>
+          <button id="cancel" class="btn btn--quiet" type="button" hidden>Cancel</button>
+        </div>
+        <div id="progress" class="progress" hidden>
+          <div class="progress__bar"><span id="progress-fill"></span></div>
+          <p id="progress-label" class="status" aria-live="polite"></p>
+        </div>
+        <p id="render-error" class="banner banner--error" hidden></p>
+
+        <div id="result" class="result" hidden>
+          <video id="video" class="result__video" controls playsinline loop muted></video>
+          <div class="result__side">
+            <p id="result-meta" class="spec"></p>
+            <div class="actions">
+              <a id="download" class="btn btn--primary" download="vacation-reel.mp4">Download MP4</a>
+              <button id="share" class="btn" type="button" hidden>Share…</button>
+            </div>
+            <p class="status">No music yet. Add a track from Instagram's library when you post.</p>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
