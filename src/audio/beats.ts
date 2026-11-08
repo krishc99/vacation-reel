@@ -1,4 +1,5 @@
 import { FFT } from './fft';
+import { beatFeatures, type BeatFeatures } from './structure';
 
 /**
  * Beat tracking, no dependencies (essentia.js is AGPL, so it's out).
@@ -17,6 +18,8 @@ export interface BeatAnalysis {
   downbeatPhase: number;
   /** RMS loudness of each beat interval (beats.length − 1 values). */
   beatEnergy: number[];
+  /** Per-beat chroma / intensity / section-change features for picking the best part. */
+  features: BeatFeatures;
   duration: number;
 }
 
@@ -189,7 +192,8 @@ function trimQuiet(beats: number[], env: Float32Array): number[] {
 export function analyzeBeats(mono: Float32Array, sampleRate: number, o = BEAT_DEFAULTS): BeatAnalysis {
   const duration = mono.length / sampleRate;
   const { full, kick, fps } = onsetEnvelopes(mono, sampleRate);
-  if (full.length < fps * 4) return { bpm: 0, beats: [], downbeatPhase: 0, beatEnergy: [], duration };
+  if (full.length < fps * 4)
+    return { bpm: 0, beats: [], downbeatPhase: 0, beatEnergy: [], duration, features: { chroma: [], intensity: [], novelty: [] } };
 
   const period = estimatePeriod(full, fps, o);
   const frames = trimQuiet(trackBeats(full, period, o.tightness), full);
@@ -220,5 +224,6 @@ export function analyzeBeats(mono: Float32Array, sampleRate: number, o = BEAT_DE
 
   // Average over the whole track: per-beat intervals are quantised to the 10.7 ms hop.
   const meanInterval = beats.length > 1 ? (beats[beats.length - 1] - beats[0]) / (beats.length - 1) : period / fps;
-  return { bpm: 60 / meanInterval, beats, downbeatPhase, beatEnergy, duration };
+  const features = beatFeatures(mono, sampleRate, beats, full, fps);
+  return { bpm: 60 / meanInterval, beats, downbeatPhase, beatEnergy, duration, features };
 }
