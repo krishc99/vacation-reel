@@ -59,14 +59,14 @@ export function slotScore(p: Photo, quality: number, who: Who = NO_WHO): number 
 
 /**
  * You're usually behind the camera, so you'd barely appear. With "me" chosen,
- * the reel keeps at least max(2, 1 in 5 photos) of you, if the album has them,
+ * the reel keeps at least max(2, 1 in 4 photos) of you, if the album has them,
  * swapping out the weakest picks without you (never a friend's only photo).
  */
 export function ensureMe(all: Photo[], picks: Set<Photo>, score: (p: Photo) => number, who: Who): number {
   const me = who.me;
   if (!me) return 0;
   const mine = (p: Photo) => who.friends(p).includes(me);
-  const target = Math.min(all.filter(mine).length, Math.max(2, Math.ceil(picks.size / 5)));
+  const target = Math.min(all.filter(mine).length, Math.max(2, Math.ceil(picks.size / 4)));
   let swaps = 0;
   while ([...picks].filter(mine).length < target) {
     const incoming = all.filter((p) => mine(p) && !picks.has(p)).sort((a, b) => score(b) - score(a))[0];

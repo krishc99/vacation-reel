@@ -87,6 +87,16 @@
 
       <section id="make-section" class="step" aria-labelledby="step-make" hidden>
         <h2 id="step-make">Make the reel</h2>
+        <div class="style-options">
+          <label class="check" for="opt-motion">
+            <input type="checkbox" id="opt-motion" checked />
+            <span>Slow zoom toward the people, crossfades between beats</span>
+          </label>
+          <label class="check" for="opt-captions">
+            <input type="checkbox" id="opt-captions" />
+            <span>Captions: place and day (e.g. “Day 2 · Lisbon”), from the photos' location, worked out on this device</span>
+          </label>
+        </div>
         <div class="actions">
           <button id="make" class="btn btn--primary" type="button">Make reel</button>
           <button id="cancel" class="btn btn--quiet" type="button" hidden>Cancel</button>
@@ -109,7 +119,7 @@
           </div>
         </div>
       </section>
-      <footer class="foot"><span id="build"></span> · Photos never leave this device.</footer>
+      <footer class="foot"><span id="build"></span> · Photos never leave this device. Place names: <a href="https://www.geonames.org/">GeoNames</a> (CC BY 4.0).</footer>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>

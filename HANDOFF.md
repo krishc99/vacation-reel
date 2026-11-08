@@ -1,4 +1,4 @@
-# HANDOFF → Milestone 6 (fun modes); M7 done first (user's call) · vacation-reel · updated 2026-11-08
+# HANDOFF → Milestone 6 (fun modes); M7 + M8 done first (user's call) · vacation-reel · updated 2026-11-09
 Audience: AI agent. Terse by design. Original plan = final; don't reopen decisions unless user asks.
 
 ## 0. Project
@@ -150,6 +150,25 @@ main.ts      currentPlan → scorePhotos + chooseReel (selectPhotos kept for tes
 ```
 Verified: 70 unit tests (chapters split by gap/distance, slots favour stronger chapter, MMR drops near-repeat, food ≤ 1, near-chronological order, hook/finale/establishing). E2E 50-photo album: hook = top-score people photo, finale = highest moment, order chronological with small swaps, near-repeat cam shot dropped. NOT tuned on real albums yet.
 
+## 7g+. After M7 (Krish: "order 90% good"; marked himself → still too many solo photos of others; unreadable files again)
+```
+importer.ts  snapshot: 3 parallel copy lanes, each file up to 3 tries (400/1600 ms backoff), arrayBuffer → stream fallback; message points at Google Photos ⋮ → Download
+scoring.ts   after percentiles, with me marked: +ME_BOOST .12 if me in photo; −SOLO_OTHER_PENALTY .15 if exactly one friend (not me) and ≤ 1 person. Groups without me unchanged
+selection    ensureMe target max(2, ceil(picks/4))
+exif.ts      BUG FIX (since M2): exifr pick listed 'latitude','longitude' → GPS never read. Now picks GPSLatitude/Ref, GPSLongitude/Ref (exifr derives latitude/longitude). Place-based chapters (1.5 km) only work from now on
+```
+
+## 7h. Milestone 8 — DONE (motion, transitions, smart crop, captions)
+```
+render/motion.ts    MOTION {maxZoom .08, zoomPerSec .05, fade .2 s, captionFade .3}. zoom about anchor (anchor stays still on screen), safeZoom limits z so the subject box stays inside the window; even clips push in, odd pull out; ease = .7 linear + .3 cosine. transitionFor: downbeat (beat−phase ≡ 0 mod 4) or chorus beat → cut, other beats → fade; no music → fade. salientCentre: max edge-energy window share − .15·|c−.5|
+musicTimeline.ts    Clip.transition set per cut (clip 0 cut). timeline.ts (no music): all fades
+crop.ts             frameFor(..., salient) → no-people cover crop centred on detail
+render.worker.ts    per-frame draw. Shot = bitmap + framing + blurred fill + anchor + z; ≤3 bitmaps alive. Fade centred on cut (±0.1 s): incoming drawn to layer canvas, blended with alpha. Motion progress spans whole visible time incl. fades. Fit mode zooms the photo inside its fixed dest box (never spills over the blur). Keyframe at each clip start. Captions lower-left (y .74h vertical / .8h horizontal), small letter-spaced top line + bold main, fade+rise
+render/captions.ts  public/geo/places.tsv (scripts/places.mjs from GeoNames cities1000.txt via npm cities-with-1000@1.0.4; pop ≥ 5000; 49k rows, 1.47 MB, ~560 KB gz; CC BY 4.0 → attribution in footer + README). 1° grid; nearest ≤ 25 km, score d/(1+.5·max(0,log10pop−3.7)). buildCaptions: clip 0 = title (month year / most common place, tie → earliest); then "Day N / place" when day|place changes, days non-decreasing only (hook/finale out of order), ≥ 2.1 s between starts, ≥ 1.8 s shown, no overlap; no GPS → "Day N"; single day → place only
+UI                  Make section: "Slow zoom…" (on), "Captions" (off). Places file fetched only when captions on and picks have GPS
+```
+Verified: 80 unit tests. E2E 50-photo GPS album (Lisbon/Sintra/Algés, 3 days) + 120 BPM song: hard cuts every 2 s on downbeats, fades between, zoom visible, captions June 2026/Sintra → Day 1/Lisbon → Day 2/Sintra → Day 3/Algés. Render 20 s reel in ~18 s desktop (static frames before; phones slower).
+
 ## 7f. Milestone 6 scope — fun modes (plan)
 Funny (jawOpen/mouthPucker/cheekPuff/eyeWide*/browInnerUp high; wink OK, half-closed both = blink), Laugh (eyes closed + big smile + open jaw), Scenic from behind (shoulders, no nose/eyes; judge scenery sharpness + framing, people small), Jump/arms up (wrists above head; highest body frame in burst). Intentional vs accidental: shared or held deviations intentional; one person in one frame accidental. A burst can yield several keepers (one per mode). Mix ~1 fun per 4–5 classic, spread out (M7 sequencing).
 
@@ -160,5 +179,5 @@ Funny (jawOpen/mouthPucker/cheekPuff/eyeWide*/browInnerUp high; wink OK, half-cl
 - ffprobe streams/frames/duration. Sandbox blocks fonts.googleapis.com (fallback fonts in screenshots; fine).
 
 ## 9. Later (unchanged)
-4 CLIP (transformers.js, lazy) + face identity (permissive / face-api.js; tune in Python) → feed face boxes into subjectSharpness regions · 5 classic best-photo · 6 fun modes · 7 score `0.20Q+0.25F+0.20C+0.35M`, MMR, friend coverage, beam-search order · 8 smart crop, Ken Burns, captions (offline reverse geocode) · 9 preview/edit · 10 Capacitor.
+4 CLIP (transformers.js, lazy) + face identity (permissive / face-api.js; tune in Python) → feed face boxes into subjectSharpness regions · 5 classic best-photo · 6 fun modes · 7 score `0.20Q+0.25F+0.20C+0.35M`, MMR, friend coverage, beam-search order · 8 DONE · 9 preview/edit · 10 Capacitor.
 Rejected: Python/FastAPI backend, InsightFace weights, BRISQUE, DBSCAN on CLIP alone, server FFmpeg.

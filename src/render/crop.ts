@@ -7,7 +7,6 @@ export interface CropRect {
 
 /**
  * Largest source rect with the target aspect ratio, centered ("cover").
- * Milestone 8 swaps the center for a face / salient-region anchor.
  */
 export function centerCoverCrop(srcW: number, srcH: number, dstW: number, dstH: number): CropRect {
   const dstAspect = dstW / dstH;
@@ -46,7 +45,15 @@ export interface Subject {
  *   whole photo over a blurred fill so nobody is cut off.
  * - Without people: crop if that loses ≤ 30% of the photo, else fit.
  */
-export function frameFor(srcW: number, srcH: number, dstW: number, dstH: number, subjects: Subject[] = []): Framing {
+export function frameFor(
+  srcW: number,
+  srcH: number,
+  dstW: number,
+  dstH: number,
+  subjects: Subject[] = [],
+  /** No people: where the detail is (normalized centre), from salientCentre. */
+  salient: { x: number; y: number } | null = null,
+): Framing {
   const cover = centerCoverCrop(srcW, srcH, dstW, dstH);
   const loss = 1 - Math.min(cover.sw / srcW, cover.sh / srcH);
 
@@ -66,7 +73,12 @@ export function frameFor(srcW: number, srcH: number, dstW: number, dstH: number,
     return fit(srcW, srcH, dstW, dstH, { x0, y0, x1, y1 });
   }
 
-  if (loss <= FRAMING.maxCoverLoss) return { mode: 'cover', crop: cover };
+  if (loss <= FRAMING.maxCoverLoss) {
+    if (!salient) return { mode: 'cover', crop: cover };
+    const sx = Math.min(srcW - cover.sw, Math.max(0, salient.x * srcW - cover.sw / 2));
+    const sy = Math.min(srcH - cover.sh, Math.max(0, salient.y * srcH - cover.sh / 2));
+    return { mode: 'cover', crop: { ...cover, sx, sy } };
+  }
   return fit(srcW, srcH, dstW, dstH, null);
 }
 

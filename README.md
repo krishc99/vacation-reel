@@ -5,14 +5,16 @@ Photos never leave the device: no backend, no paid APIs.
 
 ## Status
 
-**Milestone 7 — done** (scoring, chapters, variety, ordering). M6 fun modes next.
+**Milestone 8 — done** (slow zoom, beat-aware cuts and crossfades, smart crop, optional place/day captions). M6 fun modes next.
 
 - M1: upload → EXIF time sort → 1.5 s per photo → center crop → WebCodecs MP4 → download / share.
 - M2: HEIC (libheif wasm, lazy-loaded) · 640px + 256px downscales · content-independent subject sharpness, exposure, noise · dHash bursts (best frame kept, others shown as alternates) · quality gate (photos with a real defect, i.e. blurry / very dark / blown out, are set aside when the same moment has a clean shot) · tap a tile to swap / remove / bring back.
 - M3: pick a song from your device → own beat tracker (tempo, beats, bar starts) in a worker → every cut lands on a beat, reel starts on a bar, opener/finale hold 2× · "Best part" (chorus detection: repetition + intensity + section boundaries; step through up to 6 suggestions and preview them) or "From the start" · AAC soundtrack in the MP4 (native encoder, or wasm fallback) with 1 s fade-out · or silent export with the same cuts for Instagram's music library.
 
+- M7: one score per photo (quality, faces, looks, moment), chapters by time and place, variety, story order. Mark yourself to get more photos with you.
+- M8: slow zoom toward the people, hard cuts on bar starts and short crossfades in between, crop toward the detail in photos without people, optional captions ("Day 2 · Lisbon") from GPS using an offline place list.
+
 - Shape: vertical 1080×1920 (Reels) or horizontal 1920×1080.
-- More than 20 photos: an even spread across the trip is kept so the reel stays ≤ 30 s (placeholder until smart selection in M7).
 - Photos without EXIF dates fall back to the file's modified date.
 
 ## Run
@@ -82,3 +84,7 @@ Firefox desktop 130+ has WebCodecs; Firefox Android does not. Unsupported browse
 **Beat detection:** `essentia.js` (named in the plan as an option) is AGPL-3.0, so it is not used. The tracker in `src/audio/beats.ts` is original code: spectral-flux onsets → autocorrelation tempo → Ellis-style dynamic-programming beat tracking.
 
 **Models:** `scripts/assets.mjs` (runs before dev/build) copies MediaPipe's wasm into `public/mediapipe/` and downloads the official Face Landmarker and Pose Landmarker (lite) models (Apache-2.0) plus OpenCV Zoo's SFace (fp32, Apache-2.0) and Xenova's CLIP ViT-B/32 vision int8 (MIT) — the faster variants in the browser into `public/models/`; ONNX Runtime's wasm goes to `public/ort/`. Both folders are git-ignored and served from this site, so nothing is fetched from third parties at runtime. First visit downloads ~28 MB wasm (compressed in transit) + ~138 MB models, then the browser caches them.
+
+## Credits
+
+Place names: [GeoNames](https://www.geonames.org/) (CC BY 4.0), trimmed to towns with ≥ 5000 people (`scripts/places.mjs`).

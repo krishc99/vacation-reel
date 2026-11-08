@@ -66,6 +66,24 @@ export interface Clip {
   photoId: string;
   start: number;
   duration: number;
+  /** How this photo arrives (M8): hard cut on a downbeat, short crossfade otherwise. Default cut. */
+  transition?: 'cut' | 'fade';
+}
+
+/** On-screen text (M8), e.g. "DAY 2" over "Lisbon". */
+export interface Caption {
+  /** Small line above (may be empty). */
+  top: string;
+  main: string;
+  start: number;
+  end: number;
+}
+
+/** Look of the reel (M8). */
+export interface ReelStyle {
+  /** Slow zoom toward the people (Ken Burns). */
+  motion: boolean;
+  captions: Caption[];
 }
 
 // ---- Worker protocols -------------------------------------------------------
@@ -100,6 +118,7 @@ export type RenderRequest = {
   /** People to keep in frame (normalized boxes), keyed by photo id. */
   subjects: Record<string, import('./render/crop').Subject[]>;
   settings: ReelSettings;
+  style: ReelStyle;
   /** Song excerpt aligned to t = 0; absent = silent video. */
   audio?: ReelAudio;
 };

@@ -7,7 +7,11 @@ export interface ExifInfo {
 }
 
 const EMPTY: ExifInfo = { takenAt: null, lat: null, lon: null };
-const OPTIONS = { gps: true, pick: ['DateTimeOriginal', 'CreateDate', 'latitude', 'longitude'] };
+// exifr computes latitude/longitude from the raw GPS tags, so those must be picked too.
+const OPTIONS = {
+  gps: true,
+  pick: ['DateTimeOriginal', 'CreateDate', 'GPSLatitude', 'GPSLatitudeRef', 'GPSLongitude', 'GPSLongitudeRef'],
+};
 
 function toInfo(data: Record<string, unknown> | undefined | null): ExifInfo {
   if (!data) return EMPTY;

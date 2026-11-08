@@ -17,6 +17,7 @@ import { sortByTime } from './import/sort';
 import { excerpt, loadSong, type Song } from './audio/song';
 import { maxPhotosForMusic, planMusicTimeline, songParts, type SongStart } from './render/musicTimeline';
 import { renderReel, type RenderJob } from './render/renderer';
+import { buildCaptions, loadPlaces, nearestPlace } from './render/captions';
 import { frameFor } from './render/crop';
 import { buildTimeline, timelineDuration } from './render/timeline';
 import { NO_WHO, type Who } from './selection';
@@ -24,7 +25,7 @@ import { chooseReel } from './selection/reel';
 import { chapters } from './analysis/chapters';
 import { scorePhotos, type PhotoScore } from './analysis/scoring';
 import { centroid, clusterPeople, findMe, type FaceRef, type Person } from './analysis/friends';
-import { DEFAULT_SETTINGS, SHAPE_SIZE, type Clip, type Photo, type ReelSettings, type Shape } from './types';
+import { DEFAULT_SETTINGS, SHAPE_SIZE, type Caption, type Clip, type Photo, type ReelStyle, type ReelSettings, type Shape } from './types';
 import { megabytes, shotTime, shotTimeFull, timecode } from './ui/format';
 
 let settings: ReelSettings = { ...DEFAULT_SETTINGS };
@@ -67,6 +68,8 @@ const el = {
   musicStatus: $('music-status'),
   musicControls: $('music-controls'),
   musicInFile: $<HTMLInputElement>('music-in-file'),
+  optMotion: $<HTMLInputElement>('opt-motion'),
+  optCaptions: $<HTMLInputElement>('opt-captions'),
   musicRemove: $<HTMLButtonElement>('music-remove'),
   resultNote: $('result-note'),
   partPrev: $<HTMLButtonElement>('part-prev'),
@@ -730,6 +733,8 @@ document.querySelectorAll<HTMLInputElement>('input[name="song-start"]').forEach(
   }),
 );
 el.musicInFile.addEventListener('change', clearResult);
+el.optMotion.addEventListener('change', clearResult);
+el.optCaptions.addEventListener('change', clearResult);
 el.musicRemove.addEventListener('click', () => {
   stopPreview();
   song = null;
@@ -765,7 +770,24 @@ el.make.addEventListener('click', async () => {
   el.progressLabel.textContent = 'Starting…';
   const t0 = performance.now();
 
-  job = renderReel(clips, picks, settings, (done, total, stage) => {
+  let captions: Caption[] = [];
+  let captionNote = '';
+  if (el.optCaptions.checked) {
+    el.progressLabel.textContent = 'Looking up places…';
+    const gps = picks.some((p) => p.lat !== null && p.lon !== null);
+    let places: Awaited<ReturnType<typeof loadPlaces>> | null = null;
+    if (gps) {
+      try {
+        places = await loadPlaces();
+      } catch (err) {
+        captionNote = ` Place names unavailable (${(err as Error).message}); captions show days only.`;
+      }
+    } else captionNote = ' No location in these photos, so captions show days only.';
+    captions = buildCaptions(clips, picks, (p) => (places && p.lat !== null && p.lon !== null ? nearestPlace(places, p.lat, p.lon) : null));
+  }
+  const style: ReelStyle = { motion: el.optMotion.checked, captions };
+
+  job = renderReel(clips, picks, settings, style, (done, total, stage) => {
     const pct = total ? (done / total) * 100 : 0;
     el.progressFill.style.width = `${pct.toFixed(1)}%`;
     el.progressLabel.textContent = `${stage} · frame ${done} of ${total}`;
@@ -788,6 +810,7 @@ el.make.addEventListener('click', async () => {
       : song
         ? `Silent, cut to the beat of ${song.name}. When posting, pick the same song in Instagram's music library and start it at ${timecode(audioStart ?? 0)}.`
         : "No music. Add a track from Instagram's library when you post.";
+    el.resultNote.textContent += captionNote;
     el.share.hidden = !(navigator.canShare && navigator.canShare({ files: [resultFile] }));
     el.result.hidden = false;
     el.progress.hidden = true;

@@ -15,6 +15,13 @@ import labels from './sceneLabels.json';
  */
 export const SCORE_WEIGHTS = { Q: 0.15, F: 0.25, C: 0.15, M: 0.45 };
 
+/**
+ * Once you've marked yourself: photos with you get a lift; solo photos of
+ * someone else (just them, not you) drop. Groups without you are unchanged.
+ */
+export const ME_BOOST = 0.12;
+export const SOLO_OTHER_PENALTY = 0.15;
+
 export interface PhotoScore {
   Q: number;
   F: number;
@@ -117,13 +124,20 @@ export function scorePhotos(photos: Photo[], ctx: ScoreContext, w = SCORE_WEIGHT
   });
   const [pQ, pF, pC, pM] = (['Q', 'F', 'C', 'M'] as const).map((k) => percentiles(raw.map((r) => r[k])));
   const out = new Map<string, PhotoScore>();
+  const me = ctx.who.me;
   photos.forEach((p, i) => {
+    let adj = 0;
+    if (me) {
+      const friends = ctx.who.friends(p);
+      if (friends.includes(me)) adj = ME_BOOST;
+      else if (friends.length === 1 && (p.people?.count ?? 0) <= 1) adj = -SOLO_OTHER_PENALTY;
+    }
     out.set(p.id, {
       Q: pQ[i],
       F: pF[i],
       C: pC[i],
       M: pM[i],
-      score: w.Q * pQ[i] + w.F * pF[i] + w.C * pC[i] + w.M * pM[i],
+      score: w.Q * pQ[i] + w.F * pF[i] + w.C * pC[i] + w.M * pM[i] + adj,
       aesthetic: raw[i].aes,
       highlight: raw[i].hl,
     });

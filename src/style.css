@@ -265,3 +265,6 @@ label.btn:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; 
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
+.style-options { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
+.style-options .check { align-items: flex-start; font-weight: 500; }
+.style-options .check input { flex: none; margin-top: 2px; }

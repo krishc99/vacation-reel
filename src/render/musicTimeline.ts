@@ -1,6 +1,7 @@
 import type { BeatAnalysis } from '../audio/beats';
 import { rankSongParts, sectionLength, type SongPart } from '../audio/structure';
 import type { Clip, ReelSettings } from '../types';
+import { transitionFor } from './motion';
 
 export type SongStart = 'best' | 'start';
 
@@ -202,7 +203,8 @@ export function planMusicTimeline(photoIds: string[], a: BeatAnalysis, s: ReelSe
   beatsLayout.forEach((len, i) => {
     const from = beatAt(a, b);
     const to = beatAt(a, b + len);
-    clips.push({ photoId: photoIds[i], start: from - t0, duration: to - from });
+    const transition = i === 0 ? 'cut' : transitionFor(b, a.downbeatPhase, b === highlightBeat);
+    clips.push({ photoId: photoIds[i], start: from - t0, duration: to - from, transition });
     b += len;
   });
   const last = clips[clips.length - 1];

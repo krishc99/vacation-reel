@@ -129,22 +129,63 @@ async function runOnMainThread(queue: Item[], onResult: (r: Result) => void) {
  * (NotReadableError). Reading bytes is fast; the copies are ordinary Blobs the
  * browser can keep on disk.
  */
+async function readBytes(f: File): Promise<ArrayBuffer> {
+  try {
+    return await f.arrayBuffer();
+  } catch (err) {
+    // Some Android/cloud files only work as a stream.
+    const reader = f.stream().getReader();
+    const parts: Uint8Array[] = [];
+    let size = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push(value);
+      size += value.length;
+    }
+    if (!size && f.size) throw err;
+    const out = new Uint8Array(size);
+    let o = 0;
+    for (const p of parts) {
+      out.set(p, o);
+      o += p.length;
+    }
+    return out.buffer;
+  }
+}
+
+/** Up to 3 tries (Android's picker sometimes needs a moment to fetch a cloud photo). */
+async function copyWithRetry(f: File): Promise<File | null> {
+  for (let i = 0; i < 3; i++) {
+    try {
+      const bytes = await readBytes(f);
+      return new File([bytes], f.name, { type: f.type, lastModified: f.lastModified });
+    } catch {
+      if (i < 2) await new Promise((r) => setTimeout(r, 400 * (i + 1) ** 2));
+    }
+  }
+  return null;
+}
+
 async function snapshot(
   files: File[],
   onProgress: (done: number, total: number) => void,
 ): Promise<{ copies: File[]; unreadable: string[] }> {
-  const copies: File[] = [];
+  const copies: (File | null)[] = new Array(files.length).fill(null);
   const unreadable: string[] = [];
-  for (const f of files) {
-    try {
-      const bytes = await f.arrayBuffer();
-      copies.push(new File([bytes], f.name, { type: f.type, lastModified: f.lastModified }));
-    } catch {
-      unreadable.push(f.name);
+  let next = 0;
+  let done = 0;
+  // A few at a time: finishes the copy quickly, before Android withdraws access.
+  const lane = async () => {
+    while (next < files.length) {
+      const i = next++;
+      copies[i] = await copyWithRetry(files[i]);
+      if (!copies[i]) unreadable.push(files[i].name);
+      onProgress(++done, files.length);
     }
-    onProgress(copies.length + unreadable.length, files.length);
-  }
-  return { copies, unreadable };
+  };
+  await Promise.all([lane(), lane(), lane()]);
+  return { copies: copies.filter((c): c is File => c !== null), unreadable };
 }
 
 export async function importPhotos(
@@ -158,7 +199,8 @@ export async function importPhotos(
   const photos: Photo[] = [];
   const skipped: ImportResult['skipped'] = unreadable.map((name) => ({
     name,
-    reason: "Couldn't read this file from your device. Try picking it again; if it's an online-only cloud copy, download it first.",
+    reason:
+      "Your phone wouldn't hand this photo over (3 tries). It's probably only in Google Photos' cloud: open it in Google Photos, tap ⋮ → Download, then pick it again.",
   }));
   const seen = new Set<string>();
   let fallbackReason: string | null = null;
