@@ -38,12 +38,12 @@ src/import/importer.ts      worker pool (1 on phones, ≤2 desktop), PULL model:
 src/import/process.ts       processPhoto(id,file): shared pipeline for worker + main-thread fallback
 src/workers/import.worker.ts  thin wrapper around processPhoto: decode → 640 canvas (gray: sharpness, noise; JPEG blob kept) → close full → 256 canvas (gray: exposure, dHash; thumb). NO willReadFrequently (forces CPU canvas w/ full-res readback)
 src/analysis/pixels.ts      toGray, resizeBox, median
-src/analysis/quality.ts     subjectSharpness(gray, regions?) = mean of top-3 of 8×8 tile Laplacian variances (bokeh-safe); regions = M4 face boxes (normalized). noiseSigma = MAD of 3×3 residual on flattest 25% tiles. exposure = mean, clip<10, clip>245
+src/analysis/quality.ts     subjectSharpness(gray, regions?, σ) = CONTENT-INDEPENDENT ratio: per 8×8 tile var(Lap fine) / var(Lap after 2× box), noise-corrected (−20σ² / −5σ²; no correction if σ>5 = texture), p75 over top-25% structured tiles (or tiles in regions = M4 face boxes). Sharp photos of faces/food/landscapes 0.4–1.4, blurred ≤0.2 (validated on scikit-image samples: astronaut, camera, coffee, chelsea, rocket, grass, gravel, motorcycle, horse; σ1.0–1.5 blur ± noise). noiseSigma = MAD of 3×3 residual on flattest 25% tiles /√(8/9). exposure = mean, clip<10, clip>245
 src/analysis/dhash.ts       9×8 dHash as [hi,lo] u32; hamming
 src/analysis/bursts.ts      groupBursts: chain (lookback 3); link if (Δt≤3s & d≤20) | (Δt≤30s & d≤12); no-EXIF → d≤8. groupMoments(gap)
-src/analysis/gate.ts        percentileRanks; Q = .6·pct(sharp)+.25·pct(exposureScore)+.15·(1−pct(noise)); keeper = max Q per burst; gate on keepers: pct(Q)<0.2 → rejected unless no passing keeper in its moment (5-min chain) → onlyOfMoment. Reasons: blurry/dark/bright/grainy(needs σ>3)/weaker. Gate off if <6 photos
+src/analysis/gate.ts        Q (absolute 0..1) = .6·sharpScore(sat. (r−.2)/.25) + .25·exposureScore + .15·noiseScore(σ capped at 5). Keeper = max Q per burst, tie → raw sharpness. Gate: keeper with a real DEFECT (blurry r<.25 | dark mean<.12 or clip>.6 | bright mean>.88 or clip>.45) is set aside if its moment (5-min chain) has a clean keeper; else kept w/ onlyOfMoment. Percentile gate REMOVED (user reported people photos dropped for food/landscapes: old metric = detail amount). 'grainy' not a defect (texture fools noise estimate). percentileRanks kept for M7
 src/analysis/index.ts       Overrides{keeper,include,exclude}, tileState, candidateIds
-src/analysis/analysis.test.ts  12 unit tests (dhash, sharpness incl bokeh+regions, noise, percentiles, bursts, gate)
+src/analysis/analysis.test.ts  15 unit tests (dhash, sharpness incl bokeh+regions, noise, percentiles, bursts, gate)
 src/selection/index.ts      M1 placeholder: even spread to fit maxSeconds (20 photos @1.5s)
 src/render/{timeline,crop,encoder,renderer}.ts, workers/render.worker.ts  unchanged from M1 except decodeImage
 ```
@@ -58,7 +58,8 @@ NOT verified: real iPhone HEIC (exifr fallback tested only on pillow-heif files)
 
 ## 6. Known limits / tuning notes
 - OPEN BUG (M2 on real Android Chrome): "Import worker failed" (empty error = worker load failure or crash) even for 1 photo; laptop Chrome + Pixel emulation fine. Hardened build adds: exact error text, crash retry, main-thread fallback, footer build stamp (`__BUILD__` = UTC time · GITHUB_SHA). Root cause not yet confirmed — check what the status line / skipped list says on device. Suspects: willReadFrequently CPU canvas on huge (50–200MP) Android photos; stale cached index.html after deploy (GH Pages max-age 600) pointing to removed worker hash.
-- Sharpness at 640px misses mild blur of 12MP originals (needs ~blur r≥15 at full res to register). If real albums show misses: measure top tile at full-res crop.
+- Sharpness at 640px misses mild blur of 12MP originals (only blur ≳1px at 640 scale registers). If real albums show misses: measure top tile at full-res crop.
+- User feedback after M2: blur filtering OK; selection 'still not great' (expected until M4–M7).
 - Burst thresholds untuned on real photos (BURST_DEFAULTS, GATE_DEFAULTS are exported constants).
 - Keeper overrides cleared when photos are added (burst ids positional).
 - libheif chunk duplicated per worker bundle (2×2MB), downloaded only if a HEIC appears.

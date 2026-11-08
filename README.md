@@ -8,7 +8,7 @@ Photos never leave the device: no backend, no paid APIs.
 **Milestone 2 of 10 — done.**
 
 - M1: upload → EXIF time sort → 1.5 s per photo → center crop → WebCodecs MP4 → download / share.
-- M2: HEIC (libheif wasm, lazy-loaded) · 640px + 256px downscales · subject-area sharpness, exposure, noise · dHash bursts (best frame kept, others shown as alternates) · quality gate (bottom 20% set aside unless it's the only shot of its moment) · tap a tile to swap / remove / bring back.
+- M2: HEIC (libheif wasm, lazy-loaded) · 640px + 256px downscales · content-independent subject sharpness, exposure, noise · dHash bursts (best frame kept, others shown as alternates) · quality gate (photos with a real defect, i.e. blurry / very dark / blown out, are set aside when the same moment has a clean shot) · tap a tile to swap / remove / bring back.
 
 - Shape: vertical 1080×1920 (Reels) or horizontal 1920×1080.
 - More than 20 photos: an even spread across the trip is kept so the reel stays ≤ 30 s (placeholder until smart selection in M7).

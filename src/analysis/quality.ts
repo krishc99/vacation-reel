@@ -2,18 +2,22 @@ import { median, type Gray } from './pixels';
 
 /** Raw per-photo measurements. Album-relative scoring happens in gate.ts. */
 export interface QualityStats {
-  /** Laplacian variance of the sharpest subject region (higher = sharper). */
+  /**
+   * Content-independent sharpness: fine-scale ÷ coarse-scale detail energy in
+   * the subject area, noise-corrected. ~0.4–1.5 for sharp photos of anything
+   * (faces, food, landscapes); < ~0.2 when blurred.
+   */
   sharpness: number;
   /** Mean luma 0..1. */
   meanLuma: number;
   /** Fraction of pixels near black / near white. */
   shadowClip: number;
   highlightClip: number;
-  /** Robust noise sigma (luma levels) measured on flat areas. */
+  /** Estimated noise sigma (luma levels, 640px plane). */
   noise: number;
 }
 
-/** Normalized rect (0..1) — face boxes from Milestone 4 plug in here. */
+/** Normalized rect (0..1). Face boxes from Milestone 4 plug in here. */
 export interface Region {
   x: number;
   y: number;
@@ -22,70 +26,105 @@ export interface Region {
 }
 
 const GRID = 8;
+/** Above this, "noise" is really fine texture (gravel, foliage): don't subtract it. */
+const MAX_NOISE_CORRECTION = 5;
 
-/** 4-neighbour Laplacian response; borders left at 0. */
-function laplacian(g: Gray): Float32Array {
+/** 4-neighbour Laplacian; output is (w-2)×(h-2). */
+function laplacian(g: Gray): Gray {
   const { data, width: w, height: h } = g;
-  const out = new Float32Array(w * h);
+  const ow = w - 2;
+  const oh = h - 2;
+  const out = new Float32Array(Math.max(0, ow * oh));
   for (let y = 1; y < h - 1; y++) {
     for (let x = 1; x < w - 1; x++) {
       const i = y * w + x;
-      out[i] = data[i - 1] + data[i + 1] + data[i - w] + data[i + w] - 4 * data[i];
+      out[(y - 1) * ow + (x - 1)] = data[i - 1] + data[i + 1] + data[i - w] + data[i + w] - 4 * data[i];
     }
   }
-  return out;
+  return { data: out, width: ow, height: oh };
 }
 
-interface TileStat {
-  x: number;
-  y: number;
-  lapVar: number;
+/** 2×2 box downsample. */
+function half(g: Gray): Gray {
+  const w = g.width >> 1;
+  const h = g.height >> 1;
+  const out = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = 2 * y * g.width + 2 * x;
+      out[y * w + x] = (g.data[i] + g.data[i + 1] + g.data[i + g.width] + g.data[i + g.width + 1]) / 4;
+    }
+  }
+  return { data: out, width: w, height: h };
 }
 
-function tileLaplacianVariance(g: Gray, lap: Float32Array): TileStat[] {
-  const tiles: TileStat[] = [];
-  const tw = g.width / GRID;
-  const th = g.height / GRID;
+/** Variance of each cell of a GRID×GRID split. */
+function tileVariances(g: Gray): number[] {
+  const out: number[] = [];
   for (let ty = 0; ty < GRID; ty++) {
     for (let tx = 0; tx < GRID; tx++) {
-      const x0 = Math.max(1, Math.floor(tx * tw));
-      const x1 = Math.min(g.width - 1, Math.floor((tx + 1) * tw));
-      const y0 = Math.max(1, Math.floor(ty * th));
-      const y1 = Math.min(g.height - 1, Math.floor((ty + 1) * th));
+      const x0 = Math.floor((tx * g.width) / GRID);
+      const x1 = Math.floor(((tx + 1) * g.width) / GRID);
+      const y0 = Math.floor((ty * g.height) / GRID);
+      const y1 = Math.floor(((ty + 1) * g.height) / GRID);
       let s = 0;
       let s2 = 0;
       let n = 0;
       for (let y = y0; y < y1; y++) {
         for (let x = x0; x < x1; x++) {
-          const v = lap[y * g.width + x];
+          const v = g.data[y * g.width + x];
           s += v;
           s2 += v * v;
           n++;
         }
       }
-      const mean = n ? s / n : 0;
-      tiles.push({ x: (tx + 0.5) / GRID, y: (ty + 0.5) / GRID, lapVar: n ? s2 / n - mean * mean : 0 });
+      const m = n ? s / n : 0;
+      out.push(n ? s2 / n - m * m : 0);
     }
   }
-  return tiles;
+  return out;
+}
+
+function quantile(values: number[], q: number): number {
+  if (!values.length) return 0;
+  const s = [...values].sort((a, b) => a - b);
+  const pos = (s.length - 1) * q;
+  const lo = Math.floor(pos);
+  const hi = Math.ceil(pos);
+  return s[lo] + (s[hi] - s[lo]) * (pos - lo);
 }
 
 /**
- * Subject-area sharpness. With regions (faces, M4+) we use the tiles under them.
- * Without, we take the mean of the 3 sharpest tiles: an in-focus subject on a
- * blurred background (bokeh) scores as sharp; a fully blurred photo does not.
+ * Subject sharpness that doesn't depend on how much detail the scene has.
+ * Natural images keep roughly the same fine/coarse detail ratio at any content;
+ * blur removes fine detail first, so the ratio collapses. Laplacian noise
+ * variance (20σ² fine, 5σ² after 2× box) is subtracted so grain can't fake
+ * sharpness. Measured on the most structured quarter of tiles (75th pct), or
+ * on tiles inside `regions` (face boxes, M4+).
  */
-export function subjectSharpness(g: Gray, regions?: Region[]): number {
-  const tiles = tileLaplacianVariance(g, laplacian(g));
-  let pool = tiles;
+export function subjectSharpness(g: Gray, regions?: Region[], noiseSigma = 0): number {
+  const s = noiseSigma > MAX_NOISE_CORRECTION ? 0 : noiseSigma;
+  const fine = tileVariances(laplacian(g));
+  const coarse = tileVariances(laplacian(half(g)));
+  let tiles = fine.map((vf, i) => {
+    const vc = Math.max(1e-6, coarse[i] - 5 * s * s);
+    return { i, structure: vc, ratio: Math.max(0, vf - 20 * s * s) / vc };
+  });
   if (regions?.length) {
-    const inside = tiles.filter((t) =>
-      regions.some((r) => t.x >= r.x && t.x <= r.x + r.w && t.y >= r.y && t.y <= r.y + r.h),
-    );
-    if (inside.length) pool = inside;
+    const inside = tiles.filter(({ i }) => {
+      const cx = ((i % GRID) + 0.5) / GRID;
+      const cy = (Math.floor(i / GRID) + 0.5) / GRID;
+      return regions.some((r) => cx >= r.x && cx <= r.x + r.w && cy >= r.y && cy <= r.y + r.h);
+    });
+    if (inside.length) tiles = inside;
+  } else {
+    tiles.sort((a, b) => b.structure - a.structure);
+    tiles = tiles.slice(0, Math.max(3, Math.floor(tiles.length / 4)));
   }
-  const top = pool.map((t) => t.lapVar).sort((a, b) => b - a).slice(0, 3);
-  return top.reduce((a, b) => a + b, 0) / Math.max(1, top.length);
+  return quantile(
+    tiles.map((t) => t.ratio),
+    0.75,
+  );
 }
 
 export function exposure(g: Gray): Pick<QualityStats, 'meanLuma' | 'shadowClip' | 'highlightClip'> {
@@ -104,6 +143,7 @@ export function exposure(g: Gray): Pick<QualityStats, 'meanLuma' | 'shadowClip' 
 /**
  * Noise sigma: residual after a 3×3 box blur, measured only in the flattest
  * quarter of tiles (sky, walls) so texture isn't mistaken for noise.
+ * Box residual of white noise has std σ·√(8/9); corrected back to σ.
  */
 export function noiseSigma(g: Gray): number {
   const { data, width: w, height: h } = g;
@@ -132,7 +172,7 @@ export function noiseSigma(g: Gray): number {
           gsum += grad[i];
         }
       }
-      if (absRes.length) tiles.push({ grad: gsum / absRes.length, sigma: median(absRes) * 1.4826 });
+      if (absRes.length) tiles.push({ grad: gsum / absRes.length, sigma: (median(absRes) * 1.4826) / Math.sqrt(8 / 9) });
     }
   }
   tiles.sort((a, b) => a.grad - b.grad);
@@ -142,9 +182,10 @@ export function noiseSigma(g: Gray): number {
 
 /** Sharpness + noise on the 640px plane (detail survives); exposure on 256px. */
 export function measureQuality(detail: Gray, small: Gray): QualityStats {
+  const noise = noiseSigma(detail);
   return {
-    sharpness: subjectSharpness(detail),
-    noise: noiseSigma(detail),
+    sharpness: subjectSharpness(detail, undefined, noise),
+    noise,
     ...exposure(small),
   };
 }

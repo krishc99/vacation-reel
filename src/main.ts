@@ -169,8 +169,6 @@ const REASON_LABEL: Record<Reason, string> = {
   blurry: 'blurry',
   dark: 'too dark',
   bright: 'too bright',
-  grainy: 'grainy',
-  weaker: 'weaker shot',
 };
 
 function onTileTap(id: string) {
