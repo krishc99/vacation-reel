@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { analyzeBeats } from './beats';
-import { rankSongParts } from './structure';
+import { rankSongParts, sectionLength } from './structure';
+import { planMusicTimeline } from '../render/musicTimeline';
+import { DEFAULT_SETTINGS } from '../types';
 
 const SR = 24000;
 
@@ -116,6 +118,18 @@ describe('song structure', () => {
     }
     const bridge = starts.find((s) => s.name === 'bridge')!.t;
     expect(Math.abs(a.beats[best] - bridge)).toBeLessThan(8);
+  });
+
+  it('detects the chorus length (8 bars) and the reel runs to its end', () => {
+    const parts = rankSongParts(a.features, a.downbeatPhase, span, duration, a.beats);
+    expect(sectionLength(a.features, parts[0].beat)).toBe(32);
+    const ids = Array.from({ length: 15 }, (_, i) => `p${i}`);
+    const plan = planMusicTimeline(ids, a, DEFAULT_SETTINGS, 'best');
+    expect(plan.coversSection).toBe(true);
+    const end = plan.audioStart + plan.duration;
+    expect(Math.abs(end - plan.highlightEnd!)).toBeLessThan(1e-6);
+    // 8-bar chorus at 120 BPM = 16 s, plus the 4 s lead-in.
+    expect(plan.duration).toBeCloseTo(20, 1);
   });
 
   it('suggestions are distinct parts of the song', () => {

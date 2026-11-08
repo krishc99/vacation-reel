@@ -180,3 +180,20 @@ export function rankSongParts(f: BeatFeatures, downbeatPhase: number, span: numb
   }
   return picked;
 }
+
+/**
+ * Length (beats) of the section starting at `start`. Sections end on phrase
+ * boundaries, so only whole 2-bar lengths are considered, in order of how common
+ * they are for a chorus (8 bars, 16, 4, 12, …). The first with a clear section
+ * change there wins (the strongest change overall is often the NEXT chorus).
+ * Falls back to 8 bars.
+ */
+export function sectionLength(f: BeatFeatures, start: number): number {
+  const nb = f.novelty.length;
+  for (const m of [32, 64, 16, 48, 24, 40, 56]) {
+    const c = start + m;
+    if (c + 1 >= nb) continue;
+    if (Math.max(f.novelty[c - 1], f.novelty[c], f.novelty[c + 1]) >= 1.0) return m;
+  }
+  return 32;
+}
