@@ -9,7 +9,7 @@ Photos never leave the device: no backend, no paid APIs.
 
 - M1: upload → EXIF time sort → 1.5 s per photo → center crop → WebCodecs MP4 → download / share.
 - M2: HEIC (libheif wasm, lazy-loaded) · 640px + 256px downscales · content-independent subject sharpness, exposure, noise · dHash bursts (best frame kept, others shown as alternates) · quality gate (photos with a real defect, i.e. blurry / very dark / blown out, are set aside when the same moment has a clean shot) · tap a tile to swap / remove / bring back.
-- M3: pick a song from your device → own beat tracker (tempo, beats, bar starts) in a worker → every cut lands on a beat, reel starts on a bar, opener/finale hold 2× · "Best part" (loudest section) or "From the start" · AAC soundtrack in the MP4 (native encoder, or wasm fallback) with 1 s fade-out · or silent export with the same cuts for Instagram's music library.
+- M3: pick a song from your device → own beat tracker (tempo, beats, bar starts) in a worker → every cut lands on a beat, reel starts on a bar, opener/finale hold 2× · "Best part" (chorus detection: repetition + intensity + section boundaries; step through up to 6 suggestions and preview them) or "From the start" · AAC soundtrack in the MP4 (native encoder, or wasm fallback) with 1 s fade-out · or silent export with the same cuts for Instagram's music library.
 
 - Shape: vertical 1080×1920 (Reels) or horizontal 1920×1080.
 - More than 20 photos: an even spread across the trip is kept so the reel stays ≤ 30 s (placeholder until smart selection in M7).

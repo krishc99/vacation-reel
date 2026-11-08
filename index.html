@@ -60,6 +60,12 @@
             <label><input type="radio" name="song-start" id="song-best" value="best" checked /> <span>Best part</span></label>
             <label><input type="radio" name="song-start" id="song-start" value="start" /> <span>From the start</span></label>
           </fieldset>
+          <div class="song-parts">
+            <button id="part-prev" class="btn btn--icon" type="button" aria-label="Previous suggestion">‹</button>
+            <span id="part-label" class="song-parts__label" aria-live="polite"></span>
+            <button id="part-next" class="btn btn--icon" type="button" aria-label="Next suggestion">›</button>
+            <button id="part-play" class="btn" type="button">Play</button>
+          </div>
           <label class="check" for="music-in-file">
             <input type="checkbox" id="music-in-file" checked />
             <span>Put the song in the video file</span>
