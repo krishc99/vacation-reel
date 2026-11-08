@@ -1,4 +1,5 @@
 /// <reference lib="webworker" />
+import { decodeImage } from '../import/decode';
 import { centerCoverCrop } from '../render/crop';
 import { createEncoder, type FrameEncoder } from '../render/encoder';
 import { timelineDuration } from '../render/timeline';
@@ -15,7 +16,7 @@ function post(msg: RenderResponse, transfer: Transferable[] = []) {
  * scaled to output size, so only one output-sized bitmap is alive at a time.
  */
 async function loadFramed(file: File, w: number, h: number): Promise<ImageBitmap> {
-  const full = await createImageBitmap(file);
+  const full = await decodeImage(file);
   try {
     const c = centerCoverCrop(full.width, full.height, w, h);
     return await createImageBitmap(full, c.sx, c.sy, c.sw, c.sh, {

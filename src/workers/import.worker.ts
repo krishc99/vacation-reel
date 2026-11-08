@@ -1,48 +1,57 @@
 /// <reference lib="webworker" />
+import { dhash } from '../analysis/dhash';
+import { toGray } from '../analysis/pixels';
+import { measureQuality } from '../analysis/quality';
+import { decodeImage, looksLikeHeif } from '../import/decode';
 import { readExif } from '../import/exif';
 import type { ImportRequest, ImportResponse } from '../types';
 
 declare const self: DedicatedWorkerGlobalScope;
 
-const THUMB_EDGE = 256;
+const DETAIL_EDGE = 640; // detection + sharpness/noise
+const SMALL_EDGE = 256; // exposure, dHash, thumbnail
 
 function post(msg: ImportResponse) {
   self.postMessage(msg);
 }
 
-async function makeThumb(bitmap: ImageBitmap): Promise<Blob> {
-  const scale = THUMB_EDGE / Math.max(bitmap.width, bitmap.height);
-  const w = Math.max(1, Math.round(bitmap.width * Math.min(1, scale)));
-  const h = Math.max(1, Math.round(bitmap.height * Math.min(1, scale)));
+function scaled(src: { width: number; height: number }, edge: number) {
+  const s = Math.min(1, edge / Math.max(src.width, src.height));
+  return { w: Math.max(1, Math.round(src.width * s)), h: Math.max(1, Math.round(src.height * s)) };
+}
+
+function drawScaled(src: CanvasImageSource & { width: number; height: number }, edge: number) {
+  const { w, h } = scaled(src, edge);
   const canvas = new OffscreenCanvas(w, h);
-  const ctx = canvas.getContext('2d')!;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
   ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(bitmap, 0, 0, w, h);
-  return canvas.convertToBlob({ type: 'image/jpeg', quality: 0.8 });
+  ctx.drawImage(src, 0, 0, w, h);
+  const gray = toGray(ctx.getImageData(0, 0, w, h).data, w, h);
+  return { canvas, gray };
 }
 
 self.onmessage = async (e: MessageEvent<ImportRequest>) => {
   if (e.data.type !== 'import') return;
   for (const { id, file } of e.data.files) {
-    let bitmap: ImageBitmap | null = null;
+    let full: ImageBitmap;
     try {
-      // createImageBitmap applies EXIF orientation by default ("from-image").
-      bitmap = await createImageBitmap(file);
-    } catch {
-      const isHeic = /\.(heic|heif)$/i.test(file.name) || /hei[cf]/i.test(file.type);
-      post({
-        type: 'skipped',
-        id,
-        name: file.name,
-        reason: isHeic
-          ? 'HEIC is not supported in this browser yet (coming in the next milestone). Export as JPEG or use Safari.'
-          : 'This file could not be opened as an image.',
-      });
+      full = await decodeImage(file);
+    } catch (err) {
+      post({ type: 'skipped', id, name: file.name, reason: err instanceof Error ? err.message : String(err) });
       continue;
     }
     try {
-      const exif = await readExif(file);
-      const thumb = await makeThumb(bitmap);
+      const width = full.width;
+      const height = full.height;
+      // Downscale in two steps; full-res bitmap is released right after the first.
+      const detail = drawScaled(full, DETAIL_EDGE);
+      full.close();
+      const small = drawScaled(detail.canvas, SMALL_EDGE);
+      const [exif, thumb, detailBlob] = await Promise.all([
+        readExif(file, await looksLikeHeif(file)),
+        small.canvas.convertToBlob({ type: 'image/jpeg', quality: 0.8 }),
+        detail.canvas.convertToBlob({ type: 'image/jpeg', quality: 0.85 }),
+      ]);
       post({
         type: 'photo',
         id,
@@ -50,14 +59,16 @@ self.onmessage = async (e: MessageEvent<ImportRequest>) => {
         timeSource: exif.takenAt != null ? 'exif' : 'file',
         lat: exif.lat,
         lon: exif.lon,
-        width: bitmap.width,
-        height: bitmap.height,
+        width,
+        height,
         thumb,
+        detail: detailBlob,
+        stats: measureQuality(detail.gray, small.gray),
+        dhash: dhash(small.gray),
       });
     } catch (err) {
+      full.close();
       post({ type: 'skipped', id, name: file.name, reason: String(err) });
-    } finally {
-      bitmap.close();
     }
   }
   post({ type: 'done' });

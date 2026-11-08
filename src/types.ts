@@ -1,4 +1,6 @@
 // Shared types used across import / selection / render modules and the workers.
+import type { DHash } from './analysis/dhash';
+import type { QualityStats } from './analysis/quality';
 
 /** One imported photo, after EXIF read and thumbnail generation. */
 export interface Photo {
@@ -15,6 +17,10 @@ export interface Photo {
   height: number;
   /** Object URL of a small JPEG preview (~256px long edge). */
   thumbUrl: string;
+  /** 640px long-edge JPEG kept for detection (faces/pose, Milestone 4+). */
+  detail: Blob;
+  stats: QualityStats;
+  dhash: DHash;
 }
 
 export interface ReelSettings {
@@ -67,6 +73,9 @@ export type ImportResponse =
       width: number;
       height: number;
       thumb: Blob;
+      detail: Blob;
+      stats: QualityStats;
+      dhash: DHash;
     }
   | { type: 'skipped'; id: string; name: string; reason: string }
   | { type: 'done' };

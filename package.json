@@ -5,16 +5,19 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vitest run && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "exifr": "7.1.3",
+    "libheif-js": "1.23.5",
     "mediabunny": "1.61.6"
   },
   "devDependencies": {
     "typescript": "5.9.3",
-    "vite": "8.3.4"
+    "vite": "8.3.4",
+    "vitest": "4.1.12"
   }
 }

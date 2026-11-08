@@ -1,11 +1,20 @@
 import './style.css';
+import {
+  analyzeAlbum,
+  candidateIds,
+  emptyOverrides,
+  tileState,
+  type AlbumAnalysis,
+  type Overrides,
+  type Reason,
+} from './analysis';
 import { importPhotos } from './import/importer';
 import { sortByTime } from './import/sort';
 import { renderReel, type RenderJob } from './render/renderer';
 import { buildTimeline, timelineDuration } from './render/timeline';
 import { selectPhotos } from './selection';
-import { DEFAULT_SETTINGS, SHAPE_SIZE, type Photo, type ReelSettings, type Shape } from './types';
-import { megabytes, shotTime, timecode } from './ui/format';
+import { DEFAULT_SETTINGS, SHAPE_SIZE, type Clip, type Photo, type ReelSettings, type Shape } from './types';
+import { megabytes, shotTime, shotTimeFull, timecode } from './ui/format';
 
 let settings: ReelSettings = { ...DEFAULT_SETTINGS };
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -36,6 +45,8 @@ const el = {
 };
 
 let photos: Photo[] = [];
+let analysis: AlbumAnalysis | null = null;
+let overrides: Overrides = emptyOverrides();
 let job: RenderJob | null = null;
 let resultUrl: string | null = null;
 let resultFile: File | null = null;
@@ -55,12 +66,17 @@ async function addFiles(list: FileList | File[]) {
   if (!files.length) return;
   el.drop.classList.add('is-busy');
   el.importStatus.textContent = `Reading 0 of ${files.length}…`;
+  const t0 = performance.now();
   try {
     const { photos: added, skipped } = await importPhotos(files, (done, total) => {
       el.importStatus.textContent = `Reading ${done} of ${total}…`;
     });
     photos = sortByTime([...photos, ...added]);
-    el.importStatus.textContent = `${added.length} photo${added.length === 1 ? '' : 's'} added.`;
+    analysis = analyzeAlbum(photos);
+    // Burst ids are positional, so keeper picks don't survive a re-analysis.
+    overrides.keeper.clear();
+    const secs = ((performance.now() - t0) / 1000).toFixed(1);
+    el.importStatus.textContent = `${added.length} photo${added.length === 1 ? '' : 's'} added in ${secs}s.`;
     showSkipped(skipped);
     clearResult();
     renderGrid();
@@ -94,9 +110,7 @@ el.fileInput.addEventListener('change', () => {
     el.drop.classList.add('is-over');
   }),
 );
-['dragleave', 'drop'].forEach((t) =>
-  el.drop.addEventListener(t, () => el.drop.classList.remove('is-over')),
-);
+['dragleave', 'drop'].forEach((t) => el.drop.addEventListener(t, () => el.drop.classList.remove('is-over')));
 el.drop.addEventListener('drop', (e) => {
   e.preventDefault();
   if (e.dataTransfer?.files) addFiles(e.dataTransfer.files);
@@ -105,6 +119,8 @@ el.drop.addEventListener('drop', (e) => {
 el.clear.addEventListener('click', () => {
   photos.forEach((p) => URL.revokeObjectURL(p.thumbUrl));
   photos = [];
+  analysis = null;
+  overrides = emptyOverrides();
   el.importStatus.textContent = '';
   el.skipped.hidden = true;
   clearResult();
@@ -124,50 +140,141 @@ document.querySelectorAll<HTMLInputElement>('input[name="shape"]').forEach((r) =
 );
 setShape((document.querySelector<HTMLInputElement>('input[name="shape"]:checked')?.value as Shape) ?? 'vertical');
 
-// ---- Order grid ----------------------------------------------------------------
+// ---- Plan: analysis + overrides → selection → timeline --------------------------
+
+interface Plan {
+  picks: Photo[];
+  clips: Clip[];
+  droppedForLength: number;
+}
+
+function currentPlan(): Plan {
+  if (!analysis) return { picks: [], clips: [], droppedForLength: 0 };
+  const byId = new Map(photos.map((p) => [p.id, p]));
+  const candidates = candidateIds(analysis, overrides).map((id) => byId.get(id)!);
+  const { picks, droppedForLength } = selectPhotos(candidates, settings);
+  return { picks, clips: buildTimeline(picks.map((p) => p.id), settings), droppedForLength };
+}
+
+// ---- Grid ----------------------------------------------------------------------
+
+const REASON_LABEL: Record<Reason, string> = {
+  blurry: 'blurry',
+  dark: 'too dark',
+  bright: 'too bright',
+  grainy: 'grainy',
+  weaker: 'weaker shot',
+};
+
+function onTileTap(id: string) {
+  if (!analysis) return;
+  const v = analysis.verdicts.get(id)!;
+  switch (tileState(id, analysis, overrides)) {
+    case 'alternate':
+      overrides.keeper.set(v.burstId, id);
+      break;
+    case 'rejected':
+      overrides.include.add(id);
+      break;
+    case 'excluded':
+      overrides.exclude.delete(id);
+      break;
+    case 'keeper':
+      overrides.exclude.add(id);
+      overrides.include.delete(id);
+      break;
+  }
+  clearResult();
+  renderGrid();
+}
 
 function renderGrid() {
-  const has = photos.length > 0;
+  const has = photos.length > 0 && analysis !== null;
   el.orderSection.hidden = !has;
   el.makeSection.hidden = !has;
   if (!has) return el.grid.replaceChildren();
+  const a = analysis!;
 
-  const { picks, droppedForLength } = selectPhotos(photos, settings);
-  const clips = buildTimeline(picks.map((p) => p.id), settings);
-  const startById = new Map(clips.map((c) => [c.photoId, c.start]));
-  const duration = timelineDuration(clips);
+  const plan = currentPlan();
+  const startById = new Map(plan.clips.map((c) => [c.photoId, c.start]));
+  const duration = timelineDuration(plan.clips);
+  const byId = new Map(photos.map((p) => [p.id, p]));
+  const states = new Map(photos.map((p) => [p.id, tileState(p.id, a, overrides)]));
+  const count = (s: string) => [...states.values()].filter((x) => x === s).length;
 
-  let summary = `${picks.length} photos · ${timecode(duration)} at ${settings.secondsPerPhoto}s each, in the order they were taken.`;
-  if (droppedForLength > 0) {
-    summary += ` ${droppedForLength} faded photos are left out to keep the reel under ${settings.maxSeconds}s; the rest are spread evenly across the trip.`;
-  } else if (duration < settings.minSeconds) {
-    const need = Math.ceil(settings.minSeconds / settings.secondsPerPhoto) - picks.length;
+  const parts = [
+    `${photos.length} photos → ${a.bursts.length} moments`,
+    count('rejected') ? `${count('rejected')} set aside for quality` : '',
+    `${plan.picks.length} in the reel · ${timecode(duration)}`,
+  ].filter(Boolean);
+  let summary = parts.join(' · ') + '.';
+  if (plan.droppedForLength > 0) {
+    summary += ` ${plan.droppedForLength} more left out to stay under ${settings.maxSeconds}s, spread evenly across the trip.`;
+  } else if (duration < settings.minSeconds && plan.picks.length) {
+    const need = Math.ceil(settings.minSeconds / settings.secondsPerPhoto) - plan.picks.length;
     summary += ` Add ${need} more for a ${settings.minSeconds}s reel.`;
   }
   const noExif = photos.filter((p) => p.timeSource === 'file').length;
   if (noExif) summary += ` ${noExif} had no capture date, so their file date was used.`;
+  summary += ' Tap a photo to swap, remove or bring it back.';
   el.orderSummary.textContent = summary;
 
   el.grid.replaceChildren(
-    ...photos.map((p) => {
-      const li = document.createElement('li');
-      const start = startById.get(p.id);
-      li.className = start === undefined ? 'tile is-out' : 'tile';
-      const img = document.createElement('img');
-      img.src = p.thumbUrl;
-      img.alt = p.name;
-      img.loading = 'lazy';
-      const tc = document.createElement('span');
-      tc.className = 'tile__tc';
-      tc.textContent = start === undefined ? 'not used' : timecode(start);
-      const cap = document.createElement('span');
-      cap.className = 'tile__cap';
-      cap.textContent = shotTime(p.takenAt) + (p.timeSource === 'file' ? ' *' : '');
-      cap.title = p.timeSource === 'file' ? 'No capture date; using file date' : p.name;
-      li.append(img, tc, cap);
-      return li;
+    ...a.bursts.map((b) => {
+      const group = document.createElement('li');
+      group.className = b.photoIds.length > 1 ? 'burst is-multi' : 'burst';
+      if (b.photoIds.length > 1) {
+        const tag = document.createElement('span');
+        tag.className = 'burst__tag';
+        tag.textContent = `burst · ${b.photoIds.length}`;
+        group.append(tag);
+      }
+      const row = document.createElement('div');
+      row.className = 'burst__row';
+      for (const id of b.photoIds) row.append(tile(byId.get(id)!, states.get(id)!, startById.get(id)));
+      group.append(row);
+      return group;
     }),
   );
+}
+
+function tile(p: Photo, state: ReturnType<typeof tileState>, start: number | undefined): HTMLElement {
+  const v = analysis!.verdicts.get(p.id)!;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  const used = start !== undefined;
+  const cls = state === 'keeper' ? (used ? 'is-used' : 'is-capped') : `is-${state}`;
+  btn.className = `tile ${cls}`;
+  btn.addEventListener('click', () => onTileTap(p.id));
+
+  const img = document.createElement('img');
+  img.src = p.thumbUrl;
+  img.alt = p.name;
+  img.loading = 'lazy';
+
+  const tc = document.createElement('span');
+  tc.className = 'tile__tc';
+  const reasons = v.reasons.map((r) => REASON_LABEL[r]).join(', ');
+  const labels: Record<string, [string, string]> = {
+    'is-used': [timecode(start ?? 0), 'Remove from reel'],
+    'is-capped': ['not used', 'Left out for length. Tap to remove entirely'],
+    'is-alternate': ['alt', 'Use this one instead'],
+    'is-rejected': [v.reasons.length ? REASON_LABEL[v.reasons[0]] : 'set aside', 'Bring back'],
+    'is-excluded': ['removed', 'Bring back'],
+  };
+  const [label, action] = labels[cls];
+  tc.textContent = label;
+
+  const cap = document.createElement('span');
+  cap.className = 'tile__cap';
+  cap.textContent = shotTime(p.takenAt) + (p.timeSource === 'file' ? ' *' : '');
+
+  const note = v.onlyOfMoment && state === 'keeper' ? ` Kept although ${reasons}: only shot of this moment.` : '';
+  const why = cls === 'is-rejected' ? ` Set aside: ${reasons}.` : '';
+  btn.title = `${p.name} · ${shotTimeFull(p.takenAt)}.${why} ${action}.${note}`;
+  btn.setAttribute('aria-label', `${p.name}, ${label}. ${action}.`);
+  btn.append(img, tc, cap);
+  return btn;
 }
 
 // ---- Render ------------------------------------------------------------------
@@ -182,10 +289,9 @@ function clearResult() {
 }
 
 el.make.addEventListener('click', async () => {
-  const { picks } = selectPhotos(photos, settings);
+  const { picks, clips } = currentPlan();
   if (!picks.length) return;
   clearResult();
-  const clips = buildTimeline(picks.map((p) => p.id), settings);
 
   el.make.disabled = true;
   el.cancel.hidden = false;
