@@ -32,7 +32,33 @@ function post(msg: VisionResponse) {
   self.postMessage(msg);
 }
 
-async function init(base: string) {
+/**
+ * Why a file didn't load: HTTP status if the server answered, otherwise a network
+ * block (offline, ad/privacy blocker, firewall). Shown to the user verbatim.
+ */
+async function whyFailed(url: string, err: unknown): Promise<string> {
+  const name = url.split('/').slice(-2).join('/');
+  let status = 'blocked or offline (no response)';
+  try {
+    const r = await fetch(url, { method: 'HEAD', cache: 'no-store' });
+    status = r.ok ? `HTTP ${r.status}, so the file exists; ${err instanceof Error ? err.message : String(err)}` : `HTTP ${r.status}`;
+  } catch {
+    /* keep "blocked" */
+  }
+  return `${name}: ${status}`;
+}
+
+async function stage<T>(url: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    throw new Error(await whyFailed(url, err));
+  }
+}
+
+/** Loads the detectors. Faces are required; bodies and identities degrade gracefully. */
+async function init(base: string): Promise<string[]> {
+  const warnings: string[] = [];
   // Explicit module-build paths (FilesetResolver may pick a non-existent "nosimd"
   // variant), and load the loader ourselves: it registers globalThis.ModuleFactory.
   const files = {
@@ -41,32 +67,55 @@ async function init(base: string) {
   };
   // MediaPipe deletes globalThis.ModuleFactory after creating a task, and an ES
   // module only evaluates once, so put the factory back before each task.
-  const loader = (await import(/* @vite-ignore */ files.wasmLoaderPath)) as { default: unknown };
+  const loader = await stage(files.wasmLoaderPath, () => import(/* @vite-ignore */ files.wasmLoaderPath) as Promise<{ default: unknown }>);
   const g = self as unknown as { ModuleFactory?: unknown };
   g.ModuleFactory = loader.default;
-  face = await FaceLandmarker.createFromOptions(files, {
-    baseOptions: { modelAssetPath: new URL('models/face_landmarker.task', base).href, delegate: 'CPU' },
-    runningMode: 'IMAGE',
-    numFaces: 12,
-    minFaceDetectionConfidence: 0.6,
-    minFacePresenceConfidence: 0.6,
-    outputFaceBlendshapes: true,
-    outputFacialTransformationMatrixes: true,
-  });
-  g.ModuleFactory = loader.default;
-  ort.env.wasm.numThreads = 1; // no cross-origin isolation on GitHub Pages
-  ort.env.wasm.wasmPaths = { wasm: new URL('ort/ort-wasm-simd-threaded.wasm', base).href };
-  sface = await ort.InferenceSession.create(new URL('models/face_recognition_sface_2021dec_int8.onnx', base).href, {
-    executionProviders: ['wasm'],
-    logSeverityLevel: 3, // the model's graph triggers harmless optimiser warnings
-  });
-  pose = await PoseLandmarker.createFromOptions(files, {
-    baseOptions: { modelAssetPath: new URL('models/pose_landmarker_lite.task', base).href, delegate: 'CPU' },
-    runningMode: 'IMAGE',
-    numPoses: 6,
-    minPoseDetectionConfidence: 0.6,
-    minPosePresenceConfidence: 0.6,
-  });
+  const faceModel = new URL('models/face_landmarker.task', base).href;
+  face = await stage(faceModel, () =>
+    FaceLandmarker.createFromOptions(files, {
+      baseOptions: { modelAssetPath: faceModel, delegate: 'CPU' },
+      runningMode: 'IMAGE',
+      numFaces: 12,
+      minFaceDetectionConfidence: 0.6,
+      minFacePresenceConfidence: 0.6,
+      outputFaceBlendshapes: true,
+      outputFacialTransformationMatrixes: true,
+    }),
+  );
+
+  const poseModel = new URL('models/pose_landmarker_lite.task', base).href;
+  try {
+    g.ModuleFactory = loader.default;
+    pose = await stage(poseModel, () =>
+      PoseLandmarker.createFromOptions(files, {
+        baseOptions: { modelAssetPath: poseModel, delegate: 'CPU' },
+        runningMode: 'IMAGE',
+        numPoses: 6,
+        minPoseDetectionConfidence: 0.6,
+        minPosePresenceConfidence: 0.6,
+      }),
+    );
+  } catch (err) {
+    warnings.push(`Bodies off (${(err as Error).message})`);
+  }
+
+  const ortWasm = new URL('ort/ort-wasm-simd-threaded.wasm', base).href;
+  const sfaceModel = new URL('models/face_recognition_sface_2021dec_int8.onnx', base).href;
+  try {
+    ort.env.wasm.numThreads = 1; // no cross-origin isolation on GitHub Pages
+    ort.env.wasm.wasmPaths = { wasm: ortWasm };
+    sface = await stage(sfaceModel, () =>
+      ort.InferenceSession.create(sfaceModel, {
+        executionProviders: ['wasm'],
+        logSeverityLevel: 3, // the model's graph triggers harmless optimiser warnings
+      }),
+    );
+  } catch (err) {
+    // The runtime wasm may be the culprit rather than the model.
+    const rt = await whyFailed(ortWasm, err);
+    warnings.push(`Friend recognition off (${(err as Error).message}; runtime ${rt})`);
+  }
+  return warnings;
 }
 
 function boxOf(lms: NormalizedLandmark[], minVis = -1): Box | null {
@@ -205,7 +254,7 @@ async function analyze(req: Extract<VisionRequest, { type: 'photo' }>) {
   const detail = await createImageBitmap(req.detail);
   const whole: Tile = { x: 0, y: 0, w: 1, h: 1 };
   let faces = detectFaces(detail, whole);
-  const bodies = detectBodies(detail);
+  const bodies = pose ? detectBodies(detail) : [];
 
   // Small faces: look again on tiles of the big copy when people are likely
   // (anyone found) or the photo is wide enough to hold a distant group.
@@ -219,7 +268,7 @@ async function analyze(req: Extract<VisionRequest, { type: 'photo' }>) {
       }
       // Identity for faces big and frontal enough to recognise.
       for (const f of faces) {
-        if (f.box.h >= EMBED_MIN_FACE && Math.abs(f.yaw) <= EMBED_MAX_YAW) f.embedding = await embed(master, f);
+        if (sface && f.box.h >= EMBED_MIN_FACE && Math.abs(f.yaw) <= EMBED_MAX_YAW) f.embedding = await embed(master, f);
       }
     } finally {
       master.close();
@@ -245,10 +294,10 @@ let ready: Promise<void> | null = null;
 self.onmessage = async (e: MessageEvent<VisionRequest>) => {
   const msg = e.data;
   if (msg.type === 'init') {
-    ready = init(msg.base);
+    const loading = init(msg.base);
+    ready = loading.then(() => undefined);
     try {
-      await ready;
-      post({ type: 'ready' });
+      post({ type: 'ready', warnings: await loading });
     } catch (err) {
       post({ type: 'fatal', message: err instanceof Error ? err.message : String(err) });
     }

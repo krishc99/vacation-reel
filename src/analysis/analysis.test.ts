@@ -193,6 +193,21 @@ describe('analyzeAlbum', () => {
     expect(a.verdicts.get('friends-blurry')!.status).toBe('keeper');
   });
 
+  it('sets aside a confident screenshot/receipt even when it is the only photo of its moment', () => {
+    const junk = { label: 'junk' as const, probs: { junk: 0.35 }, embedding: [] };
+    const a = analyzeAlbum([{ ...item('receipt', 0, good, 0), scene: junk }, item('later', 600, good, 1)]);
+    expect(a.verdicts.get('receipt')!.status).toBe('rejected');
+    expect(a.verdicts.get('receipt')!.reasons).toContain('screenshot');
+  });
+
+  it('spots a phone screenshot from its file even without CLIP', () => {
+    const shot = { ...item('shot', 0, good, 0), timeSource: 'file' as const, name: 'Screenshot 2026-10-23.png', width: 1170, height: 2532 };
+    const photo = { ...item('photo', 600, good, 1), name: 'IMG_1234.JPG', width: 3024, height: 4032 };
+    const a = analyzeAlbum([shot, photo]);
+    expect(a.verdicts.get('shot')!.reasons).toContain('screenshot');
+    expect(a.verdicts.get('photo')!.reasons).not.toContain('screenshot');
+  });
+
   it('judges sharpness on faces when there are faces', () => {
     const ppl = { faces: [], bodies: [], count: 1, eyesOpen: 1, largestFace: 0.3, faceSharpness: 0.08 };
     const a = analyzeAlbum([item('g', 0, good, 0), { ...item('soft-face', 1, good, 1), people: ppl }]);

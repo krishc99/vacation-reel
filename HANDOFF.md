@@ -1,4 +1,4 @@
-# HANDOFF → Milestone 4b part 2 (scenes / CLIP) · vacation-reel · updated 2026-11-08
+# HANDOFF → Milestone 5 (classic best-photo picking) · vacation-reel · updated 2026-11-08
 Audience: AI agent. Terse by design. Original plan = final; don't reopen decisions unless user asks.
 
 ## 0. Project
@@ -104,9 +104,20 @@ main.ts                     updateFriends() after people finder finishes; friend
 ```
 Verified: mirrored/cropped/zoomed copies of a 6-person group + astronaut → 6 coherent clusters, same-face mirror cosine 0.94–0.97, no cross-person merges; a missing person = face not embedded (too small/side-on). 50-photo albums: all 10 people photos picked; friend coverage unit-tested. 12.7 s for 50 photos (10 with people) headless. 51 unit tests. Not verified: same friend across genuinely different photos (lighting/age/sunglasses) — no such test data here; threshold may need tuning on Krish's album.
 
-## 7d. M4b part 2 — CLIP scene types (BLOCKED on model access)
-- Plan: transformers.js + small quantized CLIP (Xenova/clip-vit-base-patch32, MIT weights; vision encoder q8 ~88 MB), text embeddings for fixed labels precomputed at build time → ship JSON; runtime vision only.
-- huggingface.co is blocked in this sandbox (and probing mirrors was refused) → cannot download/test. Options for user: allow huggingface.co in claude.ai Settings → Capabilities; or ship CI-download untested; or defer.
+## 7d. M4b part 2 — DONE (scene types)
+```
+model        Xenova/clip-vit-base-patch32 onnx/vision_model_q4.onnx (63.6 MB, MIT) → public/models/clip-vit-b32-vision.onnx (assets.mjs, HF; needs huggingface.co + *.hf.co CDN in sandbox allowlist — Krish added both). q4 vs fp32 embedding cosine 0.95–0.99 on samples (int8 89 MB no better). transformers.js NOT used: ORT already shipped; second runtime = +20 MB
+labels       scripts/clip_labels.py (python onnxruntime + tokenizers, text_model_quantized, prompt ensembles per class) → src/analysis/sceneLabels.json (13 classes × 512). SCENES_ENABLED = labels present
+scene.worker CLIP preprocess: shortest side 224 (canvas high quality), centre crop, mean/std, NCHW; output image_embeds → l2 → classify (softmax of 100·cos). ~0.5 s/photo headless desktop (phones slower; runs in background, grid updates live)
+scenes.ts    classify, SCENE_LABEL, isJunk (top=junk & p ≥ 0.25; browser receipt 0.29), looksLikeScreenshot (timeSource file & ratio ≥ 1.9 & (.png | /screen ?shot/i))
+gate.ts      Reason 'screenshot' (junk or screenshot heuristic, no people) → always set aside (soft)
+selection    others = fillOthers: non-food spread first; food ≤ floor(0.2·slots) unless nothing else; SCENE_BONUS sunset/landmark .4, scenery/activity .3, city/nightlife .2, vehicle −.1, room −.2
+```
+Verified (samples): coffee→food .85, moto→vehicle .92, grass→scenery, rocket→landmark, cat→animal, receipt→junk (set aside), chat screenshot→caught by file clues (CLIP said room). People photos' CLIP labels unreliable (astronaut→landmark) — people decisions use faces, not CLIP. 50-photo album: 10 people + 8 scenery + 2 food picked, no vehicles/animals. 54 unit tests.
+Also: status line now "People in X of N · F faces, I recognisable → K people you appear with, S one-off" (user reported "only 2 people"; ask which number is low). Different-person SFace cosine max 0.34 on samples → do NOT lower 0.363. NotReadableError (cloud placeholder / moved file) → retry once after 500 ms, then friendly "make it available offline" message.
+
+## 7e. Milestone 5 scope — classic best-photo picking (plan)
+Face checks per burst: eyes open (both eyeBlink < 0.4, heaviest), yaw < 25°, pitch not down, smile bonus, sharp face crop, box not touching edge. Winner: most passing faces → best worst-face → avg smile → sharpness. Expected count = max faces in burst; missing face = fail. Intentional vs accidental expressions (shared/held = intentional). A burst can yield several keepers (fun modes M6).
 
 ## 8. Test recipe
 - Synthetic photos: PIL random ellipses/lines scenes (`scene(seed,label)`), EXIF via `Image.Exif()[0x8769]={0x9003:'YYYY:MM:DD HH:MM:SS'}`; HEIC via `pillow_heif` (pip, `--break-system-packages`); blur = GaussianBlur(25–30).

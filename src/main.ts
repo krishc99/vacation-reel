@@ -10,6 +10,8 @@ import {
 } from './analysis';
 import { subjectBoxes } from './analysis/people';
 import { findPeople, type VisionJob } from './analysis/vision';
+import { findScenes, type SceneJob } from './analysis/sceneJob';
+import { SCENE_LABEL, SCENES_ENABLED } from './analysis/scenes';
 import { importPhotos } from './import/importer';
 import { sortByTime } from './import/sort';
 import { excerpt, loadSong, type Song } from './audio/song';
@@ -33,6 +35,7 @@ const el = {
   fileInput: $<HTMLInputElement>('file-input'),
   importStatus: $('import-status'),
   peopleStatus: $('people-status'),
+  sceneStatus: $('scene-status'),
   friends: $('friends'),
   friendList: $<HTMLUListElement>('friend-list'),
   friendsNote: $('friends-note'),
@@ -113,6 +116,7 @@ async function addFiles(list: FileList | File[]) {
     clearResult();
     renderGrid();
     startPeople();
+    startScenes();
   } catch (err) {
     el.importStatus.textContent = `Could not read photos: ${(err as Error).message}`;
   } finally {
@@ -182,18 +186,61 @@ function startPeople() {
     (done, total) => (el.peopleStatus.textContent = `Finding people… ${done} of ${total}`),
   );
   visionJob = job;
-  void job.done.then(({ failed, error }) => {
+  void job.done.then(({ failed, error, warnings }) => {
     if (visionJob !== job) return;
     visionJob = null;
     const withPeople = photos.filter((p) => (p.people?.count ?? 0) > 0).length;
     const secs = ((performance.now() - t0) / 1000).toFixed(1);
     el.peopleStatus.textContent = error
       ? `People finder unavailable (${error}). Photos are picked without it.`
-      : `People in ${withPeople} of ${photos.length} photos (${secs}s).` + (failed ? ` ${failed} could not be checked.` : '');
+      : `People in ${withPeople} of ${photos.length} photos (${secs}s).` +
+        (failed ? ` ${failed} could not be checked.` : '') +
+        (warnings.length ? ` ${warnings.join('. ')}.` : '');
     if (!error) {
       analysis = analyzeAlbum(photos);
       updateFriends();
+      const faces = photos.reduce((n, p) => n + (p.people?.faces.length ?? 0), 0);
+      const ided = photos.reduce((n, p) => n + (p.people?.faces.filter((f) => f.embedding).length ?? 0), 0);
+      const friends = persons.filter((x) => x.friend).length;
+      const oneOffs = persons.length - friends;
+      el.peopleStatus.textContent +=
+        ` ${faces} faces, ${ided} clear enough to recognise → ${friends} ${friends === 1 ? 'person' : 'people'} you appear with` +
+        (oneOffs ? `, ${oneOffs} one-off face${oneOffs === 1 ? '' : 's'} (treated as strangers).` : '.');
     }
+    scheduleRefresh();
+  });
+}
+
+// ---- Scenes (M4b): food / scenery / landmark / … via CLIP ----------------------
+
+let sceneJob: SceneJob | null = null;
+
+function startScenes() {
+  if (!SCENES_ENABLED) return;
+  sceneJob?.cancel();
+  const byId = new Map(photos.map((p) => [p.id, p]));
+  const t0 = performance.now();
+  el.sceneStatus.textContent = 'Getting the scene finder ready…';
+  const job = findScenes(
+    photos,
+    (id, scene) => {
+      const p = byId.get(id);
+      if (p) p.scene = scene;
+      scheduleRefresh();
+    },
+    (done, total) => (el.sceneStatus.textContent = `Sorting scenes… ${done} of ${total}`),
+  );
+  sceneJob = job;
+  void job.done.then(({ failed, error }) => {
+    if (sceneJob !== job) return;
+    sceneJob = null;
+    const secs = ((performance.now() - t0) / 1000).toFixed(1);
+    const counts = new Map<string, number>();
+    for (const p of photos) if (p.scene) counts.set(SCENE_LABEL[p.scene.label], (counts.get(SCENE_LABEL[p.scene.label]) ?? 0) + 1);
+    const top = [...counts].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${v} ${k}`).join(', ');
+    el.sceneStatus.textContent = error
+      ? `Scene finder unavailable (${error}). Food and scenery are not told apart.`
+      : `Scenes: ${top} (${secs}s).` + (failed ? ` ${failed} could not be checked.` : '');
     scheduleRefresh();
   });
 }
@@ -266,6 +313,9 @@ function renderFriends(picks: Photo[]) {
 }
 
 el.clear.addEventListener('click', () => {
+  sceneJob?.cancel();
+  sceneJob = null;
+  el.sceneStatus.textContent = '';
   visionJob?.cancel();
   visionJob = null;
   persons = [];
@@ -333,6 +383,7 @@ const REASON_LABEL: Record<Reason, string> = {
   blurry: 'blurry',
   dark: 'too dark',
   bright: 'too bright',
+  screenshot: 'screenshot/doc',
 };
 
 function onTileTap(id: string) {
@@ -425,6 +476,7 @@ function tile(p: Photo, state: ReturnType<typeof tileState>, start: number | und
     if (p.people.faceSharpness !== null) btn.dataset.faceSharp = p.people.faceSharpness.toFixed(3);
   }
   btn.dataset.sharp = p.stats.sharpness.toFixed(3);
+  if (p.scene) btn.dataset.scene = `${p.scene.label}${(p.scene.probs[p.scene.label] ?? 0).toFixed(2)}`;
 
   // Preview the framing the export will use (cover crop, or whole photo on a blurred fill).
   const framing = frameFor(p.width, p.height, settings.width, settings.height, subjectBoxes(p.people));
@@ -471,7 +523,8 @@ function tile(p: Photo, state: ReturnType<typeof tileState>, start: number | und
 
   const note = v.onlyOfMoment && state === 'keeper' ? ` Kept although ${reasons}: only shot of this moment.` : '';
   const why = cls === 'is-rejected' ? ` Set aside: ${reasons}.` : '';
-  btn.title = `${p.name} · ${shotTimeFull(p.takenAt)}.${why} ${action}.${note}`;
+  const sceneTxt = p.scene ? ` ${SCENE_LABEL[p.scene.label]}.` : '';
+  btn.title = `${p.name} · ${shotTimeFull(p.takenAt)}.${sceneTxt}${why} ${action}.${note}`;
   btn.setAttribute('aria-label', `${p.name}, ${label}. ${action}.`);
   btn.append(frame, tc, cap);
   return btn;

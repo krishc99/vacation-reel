@@ -3,7 +3,7 @@ import VisionWorker from '../workers/vision.worker?worker';
 import type { People } from './people';
 
 export interface VisionJob {
-  done: Promise<{ failed: number; error: string | null }>;
+  done: Promise<{ failed: number; error: string | null; warnings: string[] }>;
   cancel(): void;
 }
 
@@ -20,8 +20,10 @@ export function findPeople(
   const todo = photos.filter((p) => !p.people);
   const worker = new VisionWorker();
   let cancelled = false;
-  let finish: (r: { failed: number; error: string | null }) => void = () => {};
-  const done = new Promise<{ failed: number; error: string | null }>((r) => (finish = r));
+  let warnings: string[] = [];
+  type Done = { failed: number; error: string | null; warnings: string[] };
+  let finish: (r: Done) => void = () => {};
+  const done = new Promise<Done>((r) => (finish = r));
   let i = 0;
   let failed = 0;
 
@@ -29,7 +31,7 @@ export function findPeople(
     if (cancelled) return;
     if (i >= todo.length) {
       worker.terminate();
-      return finish({ failed, error: null });
+      return finish({ failed, error: null, warnings });
     }
     const p = todo[i];
     const req: VisionRequest = { type: 'photo', id: p.id, detail: p.detail, master: p.master, noise: p.stats.noise };
@@ -38,10 +40,13 @@ export function findPeople(
 
   worker.onmessage = (e: MessageEvent<VisionResponse>) => {
     const m = e.data;
-    if (m.type === 'ready') return next();
+    if (m.type === 'ready') {
+      warnings = m.warnings;
+      return next();
+    }
     if (m.type === 'fatal') {
       worker.terminate();
-      return finish({ failed: todo.length, error: m.message });
+      return finish({ failed: todo.length, error: m.message, warnings });
     }
     if (m.type === 'people') onPeople(m.id, m.people);
     else failed++;
@@ -51,12 +56,12 @@ export function findPeople(
   worker.onerror = (e) => {
     e.preventDefault();
     worker.terminate();
-    finish({ failed: todo.length - i, error: e.message || 'people finder stopped' });
+    finish({ failed: todo.length - i, error: e.message || 'people finder stopped', warnings });
   };
 
   if (todo.length === 0) {
     worker.terminate();
-    finish({ failed: 0, error: null });
+    finish({ failed: 0, error: null, warnings: [] });
   } else {
     const init: VisionRequest = { type: 'init', base: new URL(import.meta.env.BASE_URL, location.href).href };
     worker.postMessage(init);
@@ -66,7 +71,7 @@ export function findPeople(
     cancel() {
       cancelled = true;
       worker.terminate();
-      finish({ failed: 0, error: null });
+      finish({ failed: 0, error: null, warnings });
     },
   };
 }

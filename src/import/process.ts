@@ -54,12 +54,32 @@ export function errorText(err: unknown): string {
   return String(err);
 }
 
+/**
+ * The browser lost access to the file (NotReadableError): it was moved or edited
+ * after picking, or it's an online-only cloud file (iCloud / OneDrive / Google
+ * Drive placeholder) that was never downloaded.
+ */
+function unreadable(err: unknown): boolean {
+  const e = err as { name?: string; message?: string };
+  return e?.name === 'NotReadableError' || /could not be read/i.test(e?.message ?? '');
+}
+const UNREADABLE_HELP =
+  "Couldn't read this file. If it's in iCloud, OneDrive or Google Drive, make it available offline (download it to this device), then add it again.";
+
 export async function processPhoto(id: string, file: File): Promise<PhotoMsg | SkippedMsg> {
   let full: ImageBitmap;
   try {
-    full = await decodeImage(file);
+    try {
+      full = await decodeImage(file);
+    } catch (err) {
+      if (!unreadable(err)) throw err;
+      // Cloud files sometimes become readable a moment later; try once more.
+      await new Promise((r) => setTimeout(r, 500));
+      full = await decodeImage(file);
+    }
   } catch (err) {
-    return { type: 'skipped', id, name: file.name, reason: err instanceof Error ? err.message : String(err) };
+    const reason = unreadable(err) ? UNREADABLE_HELP : err instanceof Error ? err.message : String(err);
+    return { type: 'skipped', id, name: file.name, reason };
   }
   try {
     const width = full.width;
@@ -93,6 +113,7 @@ export async function processPhoto(id: string, file: File): Promise<PhotoMsg | S
     };
   } catch (err) {
     full.close();
-    return { type: 'skipped', id, name: file.name, reason: `Could not analyse this photo (${errorText(err)})` };
+    const reason = unreadable(err) ? UNREADABLE_HELP : `Could not analyse this photo (${errorText(err)})`;
+    return { type: 'skipped', id, name: file.name, reason };
   }
 }

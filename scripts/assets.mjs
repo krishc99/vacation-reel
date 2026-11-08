@@ -25,6 +25,11 @@ const MODELS = {
   // https://github.com/opencv/opencv_zoo/tree/main/models/face_recognition_sface
   'face_recognition_sface_2021dec_int8.onnx':
     'https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/face_recognition_sface/face_recognition_sface_2021dec_int8.onnx',
+  // MIT (OpenAI CLIP ViT-B/32, ONNX export by Xenova), 4-bit weights (64 MB; embeddings
+  // 0.95–0.99 cosine to full precision on samples). Image encoder only; label
+  // embeddings are precomputed in src/analysis/sceneLabels.json (scripts/clip_labels.py).
+  'clip-vit-b32-vision.onnx':
+    'https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/onnx/vision_model_q4.onnx',
 };
 
 const exists = (p) => stat(p).then((s) => s.size > 0, () => false);

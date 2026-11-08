@@ -41,9 +41,12 @@ export function isPeoplePhoto(p: Photo, who: Who = NO_WHO): boolean {
  * with people beats any without; more friends, bigger faces and open eyes help.
  * `quality` (0..1) breaks ties.
  */
+/** Scenes that make good establishing / highlight shots get a small boost among non-people photos. */
+const SCENE_BONUS: Record<string, number> = { sunset: 0.4, landmark: 0.4, scenery: 0.3, city: 0.2, activity: 0.3, nightlife: 0.2, vehicle: -0.1, room: -0.2 };
+
 export function slotScore(p: Photo, quality: number, who: Who = NO_WHO): number {
   const ppl = p.people;
-  if (!ppl || !isPeoplePhoto(p, who)) return quality;
+  if (!ppl || !isPeoplePhoto(p, who)) return quality + (p.scene ? (SCENE_BONUS[p.scene.label] ?? 0) : 0);
   const n = who.known ? Math.max(1, who.friends(p).length) : ppl.count;
   const open = ppl.faces.length ? ppl.eyesOpen / ppl.faces.length : 0.5;
   return 2 + (0.5 * Math.min(n, 4)) / 4 + 0.5 * Math.min(1, ppl.largestFace * 3) + 0.3 * open + 0.2 * quality;
@@ -100,6 +103,24 @@ function coverFriends(all: Photo[], picks: Set<Photo>, score: (p: Photo) => numb
 }
 
 /**
+ * At most one food photo per 5 leftover (non-people) slots, as a taste of the
+ * trip; more only if there's nothing else to fill with.
+ */
+export const FOOD_SHARE = 0.2;
+
+const isFood = (p: Photo) => p.scene?.label === 'food';
+
+/** Non-people slots: scenery-type photos first, food capped, all spread over the trip. */
+function fillOthers(others: Photo[], slots: number, score: (p: Photo) => number): Photo[] {
+  if (slots <= 0) return [];
+  const food = others.filter(isFood);
+  const rest = others.filter((p) => !isFood(p));
+  const foodSlots = Math.min(food.length, Math.max(slots - rest.length, Math.floor(slots * FOOD_SHARE)));
+  const restSlots = Math.min(rest.length, slots - foodSlots);
+  return [...spread(rest, restSlots, score), ...spread(food, slots - restSlots, score)];
+}
+
+/**
  * People first, across the whole trip: photos with people (friends, once known)
  * fill the slots, spread over time, best per stretch; food/scenery only fills
  * slots left over. Then every friend is guaranteed a spot. Chronological
@@ -115,7 +136,7 @@ export function selectPhotos(
   if (max <= 0) return { picks: [], droppedForLength: photos.length, friendSwaps: 0 };
   const people = photos.filter((p) => isPeoplePhoto(p, who));
   const others = photos.filter((p) => !isPeoplePhoto(p, who));
-  const chosen = new Set([...spread(people, max, score), ...spread(others, max - Math.min(max, people.length), score)]);
+  const chosen = new Set([...spread(people, max, score), ...fillOthers(others, max - Math.min(max, people.length), score)]);
   const friendSwaps = coverFriends(photos, chosen, score, who);
   const picks = photos.filter((p) => chosen.has(p));
   return { picks, droppedForLength: photos.length - picks.length, friendSwaps };

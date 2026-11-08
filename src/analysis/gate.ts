@@ -1,15 +1,22 @@
 import { groupBursts, groupMoments, type BurstInput } from './bursts';
 import { hamming } from './dhash';
 import type { People } from './people';
+import { isJunk, looksLikeScreenshot, type Scene } from './scenes';
 import type { QualityStats } from './quality';
 
-export type Reason = 'blurry' | 'dark' | 'bright';
+export type Reason = 'blurry' | 'dark' | 'bright' | 'screenshot';
 export type Status = 'keeper' | 'alternate' | 'rejected';
 
 export interface AnalysisInput extends BurstInput {
   stats: QualityStats;
   /** Faces/bodies once the people finder has run. */
   people?: People;
+  /** Scene type once the scene finder has run. */
+  scene?: Scene;
+  /** For the screenshot check (file name and pixel size). */
+  name?: string;
+  width?: number;
+  height?: number;
 }
 
 export interface Verdict {
@@ -124,7 +131,13 @@ export function analyzeAlbum(sortedItems: AnalysisInput[], opts = GATE_DEFAULTS)
         burstId: `b${b}`,
         status: id === keeperId ? 'keeper' : 'alternate',
         q: q[idx.get(id)!],
-        reasons: defects(sortedItems[idx.get(id)!].stats, opts, sortedItems[idx.get(id)!].people),
+        reasons: [
+          ...defects(sortedItems[idx.get(id)!].stats, opts, sortedItems[idx.get(id)!].people),
+          ...((isJunk(sortedItems[idx.get(id)!].scene) || looksLikeScreenshot(sortedItems[idx.get(id)!])) &&
+          !(sortedItems[idx.get(id)!].people?.count ?? 0)
+            ? (['screenshot'] as Reason[])
+            : []),
+        ],
         onlyOfMoment: false,
       });
     }
@@ -150,7 +163,8 @@ export function analyzeAlbum(sortedItems: AnalysisInput[], opts = GATE_DEFAULTS)
           hamming(hashOf(id), hashOf(other)) <= opts.sameSceneMaxDist &&
           peopleIn(other) >= Math.min(1, peopleIn(id)),
       );
-      if (replacement) v.status = 'rejected';
+      // Screenshots / receipts / documents never belong in a reel.
+      if (replacement || v.reasons.includes('screenshot')) v.status = 'rejected';
       else v.onlyOfMoment = true;
     }
   }

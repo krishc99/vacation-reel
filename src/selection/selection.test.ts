@@ -55,6 +55,16 @@ describe('selectPhotos (people first)', () => {
     expect(slotScore(strangers, 0.5, who)).toBe(0.5);
   });
 
+  it('leftover slots go to scenery first; food gets at most one per five slots', () => {
+    const withScene = (id: string, label: string) => ({ ...photo(id, 0), scene: { label, probs: {}, embedding: [] } }) as unknown as Photo;
+    const photos = Array.from({ length: 40 }, (_, i) => withScene(`p${i}`, i % 2 ? 'food' : 'scenery'));
+    const { picks } = selectPhotos(photos, 10, (p) => slotScore(p, 0.5));
+    expect(picks.filter((p) => p.scene?.label === 'food')).toHaveLength(2);
+    // Only food left? Then food fills the reel rather than leaving it short.
+    const foodOnly = Array.from({ length: 20 }, (_, i) => withScene(`f${i}`, 'food'));
+    expect(selectPhotos(foodOnly, 10).picks).toHaveLength(10);
+  });
+
   it('a sharp landscape never beats a soft-but-usable people photo', () => {
     expect(slotScore(photo('a', 1, 0.05), 0.2)).toBeGreaterThan(slotScore(photo('b', 0), 1));
   });

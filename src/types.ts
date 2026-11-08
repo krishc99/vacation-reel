@@ -2,6 +2,7 @@
 import type { DHash } from './analysis/dhash';
 import type { People } from './analysis/people';
 import type { QualityStats } from './analysis/quality';
+import type { Scene } from './analysis/scenes';
 import type { BeatAnalysis } from './audio/beats';
 import type { ReelAudio } from './audio/song';
 
@@ -28,6 +29,8 @@ export interface Photo {
   dhash: DHash;
   /** Faces and bodies (filled in after import by the vision worker; absent until then). */
   people?: People;
+  /** Scene type from CLIP (filled in after import by the scene worker). */
+  scene?: Scene;
 }
 
 export interface ReelSettings {
@@ -114,7 +117,15 @@ export type VisionRequest =
   | { type: 'photo'; id: string; detail: Blob; master: Blob; noise: number };
 
 export type VisionResponse =
-  | { type: 'ready' }
+  | { type: 'ready'; warnings: string[] }
   | { type: 'fatal'; message: string }
   | { type: 'people'; id: string; people: People }
+  | { type: 'failed'; id: string; message: string };
+
+export type SceneRequest = { type: 'init'; base: string } | { type: 'photo'; id: string; detail: Blob };
+
+export type SceneResponse =
+  | { type: 'ready' }
+  | { type: 'fatal'; message: string }
+  | { type: 'scene'; id: string; scene: Scene }
   | { type: 'failed'; id: string; message: string };
