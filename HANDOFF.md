@@ -1,4 +1,4 @@
-# HANDOFF → Milestone 5 (classic best-photo picking) · vacation-reel · updated 2026-11-08
+# HANDOFF → Milestone 6 (fun modes) · vacation-reel · updated 2026-11-08
 Audience: AI agent. Terse by design. Original plan = final; don't reopen decisions unless user asks.
 
 ## 0. Project
@@ -128,8 +128,17 @@ Also: status line now "People in X of N · F faces, I recognisable → K people 
 - Only 25 photos / 22.9 s → MUSIC_DEFAULTS.maxPhotos 25 → 40 (cap only; count comes from chorus length at preferred pace, ≤ 30 s). Summary says why photos were left out (end with the chorus / fit music in 30 s / stay under 30 s).
 - OPEN: "activity" = 37/83 suspicious (labels/prompt tuning on real photos needed).
 
-## 7e. Milestone 5 scope — classic best-photo picking (plan)
-Face checks per burst: eyes open (both eyeBlink < 0.4, heaviest), yaw < 25°, pitch not down, smile bonus, sharp face crop, box not touching edge. Winner: most passing faces → best worst-face → avg smile → sharpness. Expected count = max faces in burst; missing face = fail. Intentional vs accidental expressions (shared/held = intentional). A burst can yield several keepers (fun modes M6).
+## 7e. Milestone 5 — DONE (classic best photo per burst)
+```
+vision.worker  per face: lookDown = avg(eyeLookDownLeft/Right) blendshapes; sharpness = subjectSharpness on 96 px crop (face box ×1.2) from MASTER, noise scaled by 96/side
+classic.ts     CLASSIC {maxBlink .4, maxYaw 25, maxLookDown .5, minFaceSharpness .15, edge .005}. checkFace → pass + quality (=(1−blink)²·yaw·lookDown·sharp·edge). rankFrame(people, expected = max faces in burst, sharpness) → {passing, worst (missing → 0), smile, issues[]}. compareFrames: passing → worst (±.05 tie) → smile (±.05) → sharpness. bestFrame → −1 if no faces (old quality comparator then)
+gate.ts        burst keeper = bestFrame when ≥ 2 frames with faces; Verdict.faceRank for every face photo
+main.ts        slot score += 0.3·faceRank.worst; tile tooltip "Faces: 4 of 6 good; 1 eyes closed, 1 missing"; alternate tiles show first issue
+```
+Verified: real candid group photo → readings match the picture (2 looking down at cards, laughing man eyes shut, man turned 54°, only centre man passes → "1 of 6 good"). Burst [blurred, full, centre face blocked] → keeps full ("6 soft face", "1 missing" on others). 63 unit tests. Pitch sign unverified → not used (lookDown blendshape instead). Krish's run before M5: 43 of 83 photos really have people, app found 34; 20 food correct; 2 screenshots correct.
+
+## 7f. Milestone 6 scope — fun modes (plan)
+Funny (jawOpen/mouthPucker/cheekPuff/eyeWide*/browInnerUp high; wink OK, half-closed both = blink), Laugh (eyes closed + big smile + open jaw), Scenic from behind (shoulders, no nose/eyes; judge scenery sharpness + framing, people small), Jump/arms up (wrists above head; highest body frame in burst). Intentional vs accidental: shared or held deviations intentional; one person in one frame accidental. A burst can yield several keepers (one per mode). Mix ~1 fun per 4–5 classic, spread out (M7 sequencing).
 
 ## 8. Test recipe
 - Synthetic photos: PIL random ellipses/lines scenes (`scene(seed,label)`), EXIF via `Image.Exif()[0x8769]={0x9003:'YYYY:MM:DD HH:MM:SS'}`; HEIC via `pillow_heif` (pip, `--break-system-packages`); blur = GaussianBlur(25–30).

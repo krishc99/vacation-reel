@@ -383,7 +383,8 @@ function currentPlan(): Plan {
     ? maxPhotosForMusic(song.beats, settings, songStart, songPart)
     : Math.floor(settings.maxSeconds / settings.secondsPerPhoto);
   const a = analysis;
-  const score = (p: Photo) => slotScore(p, a.verdicts.get(p.id)?.q ?? 0, who);
+  // M5: among people photos, cleaner faces (eyes open, facing camera…) win slots.
+  const score = (p: Photo) => slotScore(p, a.verdicts.get(p.id)?.q ?? 0, who) + 0.3 * (a.verdicts.get(p.id)?.faceRank?.worst ?? 0);
   const { picks, droppedForLength, varietySwaps } = selectPhotos(candidates, max, score, who);
   lastVarietySwaps = varietySwaps;
   const ids = picks.map((p) => p.id);
@@ -547,7 +548,14 @@ function tile(p: Photo, state: ReturnType<typeof tileState>, start: number | und
   const note = v.onlyOfMoment && state === 'keeper' ? ` Kept although ${reasons}: only shot of this moment.` : '';
   const why = cls === 'is-rejected' ? ` Set aside: ${reasons}.` : '';
   const sceneTxt = p.scene ? ` ${SCENE_LABEL[p.scene.label]}.` : '';
-  btn.title = `${p.name} · ${shotTimeFull(p.takenAt)}.${sceneTxt}${why} ${action}.${note}`;
+  const fr = v.faceRank;
+  const faceTxt = fr
+    ? fr.issues.length
+      ? ` Faces: ${fr.passing} of ${fr.expected} good; ${fr.issues.join(', ')}.`
+      : ` Faces: all ${fr.expected} good.`
+    : '';
+  btn.title = `${p.name} · ${shotTimeFull(p.takenAt)}.${sceneTxt}${faceTxt}${why} ${action}.${note}`;
+  if (fr && state === 'alternate' && fr.issues.length) tc.textContent = fr.issues[0];
   btn.setAttribute('aria-label', `${p.name}, ${label}. ${action}.`);
   btn.append(frame, tc, cap);
   return btn;

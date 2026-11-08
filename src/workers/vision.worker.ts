@@ -161,6 +161,7 @@ function detectFaces(img: ImageBitmap | OffscreenCanvas, tile: Tile): FaceWithPt
         blinkR: score('eyeBlinkRight'),
         smile: (score('mouthSmileLeft') + score('mouthSmileRight')) / 2,
         jawOpen: score('jawOpen'),
+        lookDown: (score('eyeLookDownLeft') + score('eyeLookDownRight')) / 2,
         yaw,
         pitch,
       },
@@ -257,6 +258,20 @@ async function embed(master: ImageBitmap, f: FaceWithPts): Promise<number[]> {
   return l2normalize(out[sface!.outputNames[0]].data as Float32Array);
 }
 
+/** Per-face sharpness: 96 px crop (face + 20%) from the big copy, same ratio metric as the photo. */
+function faceSharpnessOf(master: ImageBitmap, f: Face, noise: number): number {
+  const side = Math.max(f.box.w * master.width, f.box.h * master.height) * 1.2;
+  const cx = (f.box.x + f.box.w / 2) * master.width;
+  const cy = (f.box.y + f.box.h / 2) * master.height;
+  const c = new OffscreenCanvas(96, 96);
+  const ctx = c.getContext('2d', { willReadFrequently: true })!;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(master, cx - side / 2, cy - side / 2, side, side, 0, 0, 96, 96);
+  const gray = toGray(ctx.getImageData(0, 0, 96, 96).data, 96, 96);
+  // Noise shrinks with the downscale; only correct when the crop isn't upsampled.
+  return subjectSharpness(gray, undefined, side >= 96 ? noise * (96 / side) : noise);
+}
+
 async function analyze(req: Extract<VisionRequest, { type: 'photo' }>) {
   const detail = await createImageBitmap(req.detail);
   const whole: Tile = { x: 0, y: 0, w: 1, h: 1 };
@@ -273,6 +288,7 @@ async function analyze(req: Extract<VisionRequest, { type: 'photo' }>) {
         for (const t of tiles(master.width, master.height)) faces.push(...detectFaces(crop(master, t), t));
         faces = dedupe(faces);
       }
+      for (const f of faces) f.sharpness = faceSharpnessOf(master, f, req.noise);
       // Identity for faces big and frontal enough to recognise.
       for (const f of faces) {
         if (sface && f.box.h >= EMBED_MIN_FACE && Math.abs(f.yaw) <= EMBED_MAX_YAW) f.embedding = await embed(master, f);

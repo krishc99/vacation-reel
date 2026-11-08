@@ -1,4 +1,5 @@
 import { groupBursts, groupMoments, type BurstInput } from './bursts';
+import { bestFrame, rankFrame, type FrameRank } from './classic';
 import { hamming } from './dhash';
 import type { People } from './people';
 import { isJunk, looksLikeScreenshot, type Scene } from './scenes';
@@ -28,6 +29,8 @@ export interface Verdict {
   reasons: Reason[];
   /** Low quality but kept because nothing else covers its moment. */
   onlyOfMoment: boolean;
+  /** Face checks for this frame (eyes, facing, sharp face, in frame, everyone present). */
+  faceRank?: FrameRank;
 }
 
 export interface Burst {
@@ -124,7 +127,13 @@ export function analyzeAlbum(sortedItems: AnalysisInput[], opts = GATE_DEFAULTS)
   };
   const verdicts = new Map<string, Verdict>();
   const bursts: Burst[] = groupBursts(sortedItems).map((ids, b) => {
-    const keeperId = ids.reduce((best, id) => (better(id, best) ? id : best));
+    // M5: with faces, the classic face checks pick the frame; otherwise quality does.
+    const frames = ids.map((id) => {
+      const it = sortedItems[idx.get(id)!];
+      return { people: it.people, sharpness: it.people?.faceSharpness ?? it.stats.sharpness };
+    });
+    const classic = ids.length > 1 ? bestFrame(frames) : null;
+    const keeperId = classic && classic.index >= 0 ? ids[classic.index] : ids.reduce((best, id) => (better(id, best) ? id : best));
     for (const id of ids) {
       verdicts.set(id, {
         id,
@@ -139,6 +148,11 @@ export function analyzeAlbum(sortedItems: AnalysisInput[], opts = GATE_DEFAULTS)
             : []),
         ],
         onlyOfMoment: false,
+        faceRank: classic
+          ? classic.ranks[ids.indexOf(id)]
+          : sortedItems[idx.get(id)!].people?.faces.length
+            ? rankFrame(sortedItems[idx.get(id)!].people, sortedItems[idx.get(id)!].people!.faces.length, 0)
+            : undefined,
       });
     }
     return { id: `b${b}`, photoIds: ids, keeperId };

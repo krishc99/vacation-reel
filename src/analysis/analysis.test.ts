@@ -245,3 +245,20 @@ describe('dropObjectFaces', () => {
     expect(dropObjectFaces(p, { label: 'food', probs: { food: 0.7, people: 0.05 } }).count).toBe(1);
   });
 });
+
+describe('burst keeper (M5)', () => {
+  const good: QualityStats = { sharpness: 0.7, meanLuma: 0.5, shadowClip: 0.01, highlightClip: 0.01, noise: 1.5 };
+  const f = (blink: number) => ({ box: { x: 0.4, y: 0.3, w: 0.1, h: 0.12 }, blinkL: blink, blinkR: blink, smile: 0.3, jawOpen: 0, yaw: 0, pitch: 0, lookDown: 0, sharpness: 0.6 });
+  it('keeps the eyes-open frame over a sharper frame with someone blinking', () => {
+    const T = Date.UTC(2026, 9, 22, 9);
+    const mk = (id: string, s: number, blink: number) => ({
+      id, takenAt: T + s * 1000, timeSource: 'exif' as const, dhash: [0, s] as [number, number],
+      stats: { ...good, sharpness: blink > 0.5 ? 1.2 : 0.6 },
+      people: summarize([f(0.05), f(blink)], [], 0.6),
+    });
+    const a = analyzeAlbum([mk('sharp-blink', 0, 0.9), mk('open', 1, 0.05)]);
+    expect(a.bursts).toHaveLength(1);
+    expect(a.bursts[0].keeperId).toBe('open');
+    expect(a.verdicts.get('sharp-blink')!.faceRank!.issues).toContain('1 eyes closed');
+  });
+});

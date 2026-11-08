@@ -21,6 +21,10 @@ export interface Face {
   pitch: number;
   /** 128-d SFace identity embedding (L2-normalised); absent for tiny or side-on faces. */
   embedding?: number[];
+  /** Eyes looking down (blendshape eyeLookDown L/R average, 0..1): checking a phone, not the camera. */
+  lookDown?: number;
+  /** Sharpness of this face alone (content-independent ratio on a 96 px crop of the big copy). */
+  sharpness?: number;
 }
 
 export interface Body {
