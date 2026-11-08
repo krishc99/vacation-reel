@@ -21,6 +21,8 @@ export interface Photo {
   thumbUrl: string;
   /** 640px long-edge JPEG kept for detection (faces/pose, Milestone 4+). */
   detail: Blob;
+  /** ≤2560px JPEG used for rendering. The original File may become unreadable (Android). */
+  master: Blob;
   stats: QualityStats;
   dhash: DHash;
 }
@@ -76,6 +78,7 @@ export type ImportResponse =
       height: number;
       thumb: Blob;
       detail: Blob;
+      master: Blob;
       stats: QualityStats;
       dhash: DHash;
     }
@@ -86,7 +89,8 @@ export type ImportResponse =
 export type RenderRequest = {
   type: 'render';
   clips: Clip[];
-  files: Record<string, File>;
+  /** Render copies (Photo.master), keyed by photo id. */
+  images: Record<string, Blob>;
   settings: ReelSettings;
   /** Song excerpt aligned to t = 0; absent = silent video. */
   audio?: ReelAudio;

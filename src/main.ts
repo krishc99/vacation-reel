@@ -11,7 +11,7 @@ import {
 import { importPhotos } from './import/importer';
 import { sortByTime } from './import/sort';
 import { excerpt, loadSong, type Song } from './audio/song';
-import { maxPhotosForMusic, planMusicTimeline, type SongStart } from './render/musicTimeline';
+import { maxPhotosForMusic, planMusicTimeline, songParts, type SongStart } from './render/musicTimeline';
 import { renderReel, type RenderJob } from './render/renderer';
 import { buildTimeline, timelineDuration } from './render/timeline';
 import { selectPhotos } from './selection';
@@ -53,6 +53,10 @@ const el = {
   musicInFile: $<HTMLInputElement>('music-in-file'),
   musicRemove: $<HTMLButtonElement>('music-remove'),
   resultNote: $('result-note'),
+  partPrev: $<HTMLButtonElement>('part-prev'),
+  partNext: $<HTMLButtonElement>('part-next'),
+  partLabel: $('part-label'),
+  partPlay: $<HTMLButtonElement>('part-play'),
 };
 
 let photos: Photo[] = [];
@@ -63,6 +67,7 @@ let resultUrl: string | null = null;
 let resultFile: File | null = null;
 let song: Song | null = null;
 let songStart: SongStart = 'best';
+let songPart = 0;
 
 // ---- Build stamp (confirms which version is live) ------------------------------
 
@@ -179,7 +184,7 @@ function currentPlan(): Plan {
   const { picks, droppedForLength } = selectPhotos(candidates, max);
   const ids = picks.map((p) => p.id);
   if (song && ids.length) {
-    const m = planMusicTimeline(ids, song.beats, settings, songStart);
+    const m = planMusicTimeline(ids, song.beats, settings, songStart, songPart);
     return { picks, clips: m.clips, droppedForLength, audioStart: m.audioStart };
   }
   return { picks, clips: buildTimeline(ids, settings), droppedForLength, audioStart: null };
@@ -224,6 +229,7 @@ function renderGrid() {
   const a = analysis!;
 
   const plan = currentPlan();
+  updateSongParts(plan);
   const startById = new Map(plan.clips.map((c) => [c.photoId, c.start]));
   const duration = timelineDuration(plan.clips);
   const byId = new Map(photos.map((p) => [p.id, p]));
@@ -306,6 +312,54 @@ function tile(p: Photo, state: ReturnType<typeof tileState>, start: number | und
 
 // ---- Music -------------------------------------------------------------------
 
+function updateSongParts(plan: Plan) {
+  if (!song || !plan.picks.length || plan.audioStart === null) return;
+  const total = songStart === 'best' ? songParts(song.beats, plan.picks.length, settings).length : 0;
+  const at = `starts ${timecode(plan.audioStart)}`;
+  el.partLabel.textContent = songStart === 'best' && total ? `Suggestion ${Math.min(songPart, total - 1) + 1} of ${total} · ${at}` : `From the top · ${at}`;
+  el.partPrev.hidden = el.partNext.hidden = songStart !== 'best';
+  el.partPrev.disabled = songPart <= 0;
+  el.partNext.disabled = songPart >= total - 1;
+}
+
+function stepPart(d: number) {
+  songPart = Math.max(0, songPart + d);
+  stopPreview();
+  clearResult();
+  renderGrid();
+}
+el.partPrev.addEventListener('click', () => stepPart(-1));
+el.partNext.addEventListener('click', () => stepPart(1));
+
+// Preview the exact excerpt the reel will use (same start, length and fade).
+let previewCtx: AudioContext | null = null;
+let previewSrc: AudioBufferSourceNode | null = null;
+function stopPreview() {
+  previewSrc?.stop();
+  previewSrc = null;
+  el.partPlay.textContent = 'Play';
+}
+el.partPlay.addEventListener('click', () => {
+  if (previewSrc) return stopPreview();
+  const plan = currentPlan();
+  if (!song || plan.audioStart === null) return;
+  previewCtx ??= new AudioContext();
+  const clip = excerpt(song, plan.audioStart, timelineDuration(plan.clips));
+  const buf = previewCtx.createBuffer(2, clip.left.length, clip.sampleRate);
+  buf.copyToChannel(clip.left as Float32Array<ArrayBuffer>, 0);
+  buf.copyToChannel(clip.right as Float32Array<ArrayBuffer>, 1);
+  const src = previewCtx.createBufferSource();
+  src.buffer = buf;
+  src.connect(previewCtx.destination);
+  src.onended = () => {
+    if (previewSrc === src) stopPreview();
+  };
+  void previewCtx.resume();
+  src.start();
+  previewSrc = src;
+  el.partPlay.textContent = 'Stop';
+});
+
 el.audioInput.addEventListener('change', async () => {
   const file = el.audioInput.files?.[0];
   el.audioInput.value = '';
@@ -314,7 +368,9 @@ el.audioInput.addEventListener('change', async () => {
   el.musicStatus.textContent = `Finding the beat in ${file.name}…`;
   const t0 = performance.now();
   try {
+    stopPreview();
     song = await loadSong(file);
+    songPart = 0;
     const secs = ((performance.now() - t0) / 1000).toFixed(1);
     el.musicStatus.textContent = `${song.name} · ${Math.round(song.beats.bpm)} BPM · ${timecode(song.duration)} · analysed in ${secs}s. Cuts land on the beat.`;
     el.musicControls.hidden = false;
@@ -334,12 +390,14 @@ document.querySelectorAll<HTMLInputElement>('input[name="song-start"]').forEach(
   r.addEventListener('change', () => {
     if (!r.checked) return;
     songStart = r.value as SongStart;
+    stopPreview();
     clearResult();
     renderGrid();
   }),
 );
 el.musicInFile.addEventListener('change', clearResult);
 el.musicRemove.addEventListener('click', () => {
+  stopPreview();
   song = null;
   el.musicControls.hidden = true;
   el.musicStatus.textContent = 'Optional. Cuts land on the beat. The song never leaves this device.';
