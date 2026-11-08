@@ -1,4 +1,4 @@
-# HANDOFF → Milestone 4 · vacation-reel · updated 2026-11-08
+# HANDOFF → Milestone 4b · vacation-reel · updated 2026-11-08
 Audience: AI agent. Terse by design. Original plan = final; don't reopen decisions unless user asks.
 
 ## 0. Project
@@ -81,10 +81,22 @@ Verified: tempo ±0.5% & >90% beats within 35 ms on synthetic drums 87/100/124/1
 
 Also in this session (post-M2 user feedback "fewer people, more food/landscapes"): gate now only sets aside CLEARLY unusable photos (sharp <0.15, mean <0.07 or clip >0.75, bright >0.93 or clip >0.6) and only if a clean keeper of the SAME SCENE (dHash ≤22) exists in the moment. Bursts tightened: fast 2 s/≤14, window 15 s/≤10. Real fix for people = M4 faces (people-aware gate/selection).
 
-## 7b. Milestone 4 scope — CLIP + face identity
-- Plan: CLIP labels+embeddings (transformers.js, small quantized, lazy, cache), face/blendshapes/pose (MediaPipe Face/Pose Landmarker), identity embeddings (permissive model or face-api.js; NOT InsightFace) → cluster into people (recurring = friends, one-off small = strangers). Tune in Python, port.
-- PRIORITY from user: reel must favour people. Use face count/size immediately: gate never replaces a face photo with a no-face photo; subjectSharpness(regions=face boxes); selection cap prefers photos with friends until M7 scoring.
-- Check MediaPipe tasks-vision in MODULE workers (uses importScripts? may need classic worker or main thread). Model files: self-host in /public (license Apache-2.0) to avoid third-party fetch; verify size.
+## 7b. Milestone 4a — DONE (people first)
+```
+scripts/assets.mjs          predev/prebuild: copy tasks-vision wasm (module build) → public/mediapipe; download face_landmarker.task + pose_landmarker_lite.task (official GCS URLs) → public/models (skip if present). Both git-ignored. CI (Actions) has internet; sandbox doesn't → seed public/models from npm 'ptmaker-vision-models' (third-party mirror, TEST ONLY)
+src/workers/vision.worker.ts  MediaPipe in a MODULE worker: build fileset by hand (module_internal js/wasm), import the loader and set self.ModuleFactory before EACH createFromOptions (MediaPipe deletes it; ESM evaluates once). CPU delegate. FaceLandmarker numFaces 12, conf 0.6 (0.45 → false face on a bike wheel; 0.7 → misses 2/6 in group), blendshapes + matrices. PoseLandmarker lite numPoses 6, conf 0.6; body counted only with both shoulders + (both hips or head: nose/eyes/ears) + upright. Pass 1 on 640 detail; pass 2 on 3×2 (2×3) overlapping tiles of master when anyone found or aspect>1.2; dedupe by IoU/centre. faceSharpness = subjectSharpness on face tiles (overlap test)
+src/analysis/people.ts      types Face/Body/People, summarize (count = faces + faceless bodies, eyesOpen blink<0.4, largestFace), subjectBoxes (face + headroom, faceless body upper 60%), headAngles (sign convention unverified)
+src/analysis/vision.ts      findPeople(): one worker, sequential, streams results; main re-analyses (debounced 400 ms). Status line #people-status
+gate.ts                     defects use faceSharpness when faces; replacement must be same scene AND have people if the failing photo has; burst keeper = most eyes-open faces, then Q
+selection/index.ts          selectPhotos(photos, max, score): split chronologically into max equal runs, best slotScore per run. slotScore: people → 2 + count/size/open-eyes bonuses; else quality only
+render/crop.ts              frameFor(…, subjects): if union of subjects fits the cover window (≤96%) → cover placed on them (centre at 42% height); else fit with edge trim reduced so nobody is cut; no subjects → old rule. Tiles mirror it via object-position
+```
+Verified: sample album (8): group photo = 6 people exactly, portraits = 1, food/cat/rocket/bike/grass = 0, 2.3 s. Face sharpness sharp 0.48–1.1 vs blurred 0.10–0.13. 50-photo album (10 people photos interleaved) with 20 slots → all 10 people photos picked, 1 non-people per remaining run; no false positives after tuning; frames: group fitted whole, sub-group/portrait cropped around faces. 43 unit tests. Not verified: real phone albums (night, sunglasses, crowds), speed on phones (~0.13 s/photo headless desktop), big crowds (numFaces 12 cap), person_camera (face hidden behind camera) → 0 people.
+
+## 7c. Milestone 4b scope — friends + scene types
+- Identity embeddings (permissive model; NOT InsightFace) → cluster across album; recurring = friends, one-off small = strangers; friend coverage in selection (plan step 3 global swap-in).
+- CLIP (transformers.js, small quantized, lazy, cached): labels (food, landscape, landmark, sunset, party…), embeddings for variety (MMR) and highlight prompts. Cap food/landscape share.
+- Verify licenses + sizes first; models must be self-hosted like M4a.
 
 ## 8. Test recipe
 - Synthetic photos: PIL random ellipses/lines scenes (`scene(seed,label)`), EXIF via `Image.Exif()[0x8769]={0x9003:'YYYY:MM:DD HH:MM:SS'}`; HEIC via `pillow_heif` (pip, `--break-system-packages`); blur = GaussianBlur(25–30).

@@ -1,3 +1,5 @@
 node_modules
 dist
 *.mp4
+public/mediapipe
+public/models

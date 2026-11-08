@@ -5,7 +5,7 @@ Photos never leave the device: no backend, no paid APIs.
 
 ## Status
 
-**Milestone 3 of 10 — done.**
+**Milestone 4a (people) — done.** M4b (friends + scene types) next.
 
 - M1: upload → EXIF time sort → 1.5 s per photo → center crop → WebCodecs MP4 → download / share.
 - M2: HEIC (libheif wasm, lazy-loaded) · 640px + 256px downscales · content-independent subject sharpness, exposure, noise · dHash bursts (best frame kept, others shown as alternates) · quality gate (photos with a real defect, i.e. blurry / very dark / blown out, are set aside when the same moment has a clean shot) · tap a tile to swap / remove / bring back.
@@ -18,7 +18,8 @@ Photos never leave the device: no backend, no paid APIs.
 ## Run
 
 ```bash
-npm install
+npm install                 # then: npm run dev / build fetch the models into public/models/ (needs internet once)
+# npm install
 npm run dev      # http://localhost:5173
 npm test         # unit tests (analysis)
 npm run build    # typecheck + tests + static site in dist/
@@ -57,6 +58,7 @@ Firefox desktop 130+ has WebCodecs; Firefox Android does not. Unsupported browse
 | vite | 8.3.4 | MIT | build (dev) |
 | typescript | 5.9.3 | Apache-2.0 | types (dev) |
 | @mediabunny/aac-encoder | 1.61.6 | MPL-2.0 (bundles FFmpeg's AAC encoder, LGPL) | AAC when the browser has none; lazy chunk |
+| @mediapipe/tasks-vision | 1.1.1 | Apache-2.0 | face + pose landmarks; wasm runtime copied to `public/mediapipe/` |
 | vitest | 4.1.12 | MIT | unit tests (dev) |
 
 **Note:** the plan named `mp4-muxer`; its npm page now marks it deprecated in favour of Mediabunny, its successor by the same author. The encoder is isolated in `src/render/encoder.ts`, so it can be swapped. MPL-2.0 is file-level copyleft: fine for commercial use as long as changes to Mediabunny's own files are published.
@@ -77,3 +79,5 @@ Firefox desktop 130+ has WebCodecs; Firefox Android does not. Unsupported browse
 10. Capacitor app
 
 **Beat detection:** `essentia.js` (named in the plan as an option) is AGPL-3.0, so it is not used. The tracker in `src/audio/beats.ts` is original code: spectral-flux onsets → autocorrelation tempo → Ellis-style dynamic-programming beat tracking.
+
+**Models:** `scripts/assets.mjs` (runs before dev/build) copies MediaPipe's wasm into `public/mediapipe/` and downloads the official Face Landmarker and Pose Landmarker (lite) models (Apache-2.0) into `public/models/`. Both folders are git-ignored and served from this site, so nothing is fetched from third parties at runtime. First visit downloads ~13.5 MB wasm (compressed in transit) + ~9.5 MB models, then the browser caches them.
