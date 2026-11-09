@@ -5,6 +5,8 @@ export interface BurstInput {
   takenAt: number; // ms
   timeSource: 'exif' | 'file';
   dhash: DHash;
+  /** Videos are never folded into a burst of photos. */
+  video?: unknown;
 }
 
 export const BURST_DEFAULTS = {
@@ -30,6 +32,7 @@ export function groupBursts(sorted: BurstInput[], opts = BURST_DEFAULTS): string
     const cur = bursts[bursts.length - 1];
     const linked =
       cur?.slice(-opts.lookback).some((q) => {
+        if (p.video || q.video) return false;
         const d = hamming(p.dhash, q.dhash);
         if (p.timeSource === 'file' || q.timeSource === 'file') return d <= opts.noTimeMaxDist;
         const dt = Math.abs(p.takenAt - q.takenAt) / 1000;

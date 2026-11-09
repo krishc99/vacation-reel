@@ -27,6 +27,8 @@ export const SOLO_OTHER_PENALTY = 0.3;
 export const COVERED_PENALTY = 0.25;
 /** Photo without a camera date. */
 export const NO_DATE_PENALTY = 0.1;
+/** Video moments. */
+export const VIDEO_BOOST = 0.06;
 
 export interface PhotoScore {
   Q: number;
@@ -177,6 +179,8 @@ export function scorePhotos(photos: Photo[], ctx: ScoreContext, w = SCORE_WEIGHT
     // No camera date (forwarded/WhatsApp copies, screenshots of photos): can't be
     // placed in the story, often a lower-quality copy of something else.
     if (p.timeSource !== 'exif') adj -= NO_DATE_PENALTY;
+    // A moving moment brings the reel to life.
+    if (p.video) adj += VIDEO_BOOST;
     out.set(p.id, {
       Q: pQ[i],
       F: pF[i],

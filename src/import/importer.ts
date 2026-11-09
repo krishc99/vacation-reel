@@ -226,6 +226,7 @@ export async function importPhotos(
         master: msg.master,
         stats: msg.stats,
         dhash: msg.dhash,
+        video: msg.video,
       });
     } else {
       skipped.push({ name: msg.name, reason: msg.reason });

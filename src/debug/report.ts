@@ -57,6 +57,7 @@ export async function buildReport(r: ReportInput, withThumbs: boolean): Promise<
       timeSource: p.timeSource,
       gps: p.lat !== null ? [r2(p.lat), r2(p.lon)] : null,
       size: [p.width, p.height],
+      video: p.video ? { duration: r2(p.video.duration), start: r2(p.video.start), end: r2(p.video.end), sound: p.video.hasAudio } : null,
       reel: inReel.get(p.id) ?? null,
       candidate: cand.has(p.id),
       burst: v?.burstId ?? null,

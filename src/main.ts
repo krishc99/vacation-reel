@@ -19,11 +19,12 @@ import { maxPhotosForMusic, planMusicTimeline, songParts, type SongStart } from 
 import { renderReel, type RenderJob } from './render/renderer';
 import { DRIVE_CLIENT_ID, DRIVE_KEY, downloadDrive, listDrive, loadGoogleSignIn, signIn, type DriveAuth } from './import/drive';
 import { hamming } from './analysis/dhash';
+import { isVideoFile } from './import/process';
 import { buildReport } from './debug/report';
 import { buildCaptions, loadPlaces, nearestPlace, photoLabels } from './render/captions';
 import type { Look } from './render/looks';
 import { frameFor } from './render/crop';
-import { buildTimeline, timelineDuration } from './render/timeline';
+import { buildTimeline, mergeSlots, timelineDuration, videoSlots } from './render/timeline';
 import { NO_WHO, type Who } from './selection';
 import { chooseReel } from './selection/reel';
 import { chapters } from './analysis/chapters';
@@ -109,7 +110,7 @@ if (typeof VideoEncoder === 'undefined' || typeof OffscreenCanvas === 'undefined
 // ---- Import ------------------------------------------------------------------
 
 async function addFiles(list: FileList | File[], fromDrive: { skipped: { name: string; reason: string }[] } | null = null) {
-  const files = [...list].filter((f) => f.type.startsWith('image/') || /\.(heic|heif)$/i.test(f.name));
+  const files = [...list].filter((f) => f.type.startsWith('image/') || /\.(heic|heif)$/i.test(f.name) || isVideoFile(f));
   if (!files.length) {
     if (fromDrive) showSkipped(fromDrive.skipped);
     return;
@@ -278,7 +279,7 @@ function showSkipped(skipped: { name: string; reason: string }[]) {
 // gives up silently on big selections (the tick does nothing). "Compatible mode"
 // (remembered on this device) goes back to plain "image/*" in case a phone dislikes the list.
 const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-const IOS_ORIGINALS = 'image/heic,image/heif,image/jpeg,image/png,image/webp';
+const IOS_ORIGINALS = 'image/heic,image/heif,image/jpeg,image/png,image/webp,video/quicktime,video/mp4';
 const compatKey = 'vacation-reel.ios-compatible';
 const iosCompatible = () => {
   try {
@@ -289,7 +290,7 @@ const iosCompatible = () => {
 };
 const iosToggle = document.getElementById('ios-picker') as HTMLButtonElement;
 function applyIOSPicker() {
-  el.fileInput.accept = iosCompatible() ? 'image/*' : IOS_ORIGINALS;
+  el.fileInput.accept = iosCompatible() ? 'image/*,video/*' : IOS_ORIGINALS;
   iosToggle.textContent = iosCompatible()
     ? 'Compatible mode is on (iPhone converts photos first: pick 30–40 at a time). Turn off'
     : "iPhone: if the tick doesn't work after choosing, try compatible mode";
@@ -717,12 +718,36 @@ function currentPlan(): Plan {
   const reel = chooseReel(candidates, max, lastScores, who);
   const { picks, droppedForLength } = reel;
   lastChapters = reel.chapters;
-  const ids = picks.map((p) => p.id);
-  if (song && ids.length) {
-    const m = planMusicTimeline(ids, song.beats, settings, songStart, songPart);
-    return { picks, clips: m.clips, droppedForLength, audioStart: m.audioStart, highlight: m.highlight, coversSection: m.coversSection };
+  // Videos use two beat slots: if that overflows the length, drop the weakest photos.
+  const isVid = (id: string) => !!byId.get(id)?.video;
+  let kept = picks;
+  if (song) {
+    while (kept.length > 1 && kept.length + kept.filter((p) => p.video).length > max) {
+      const weakest = kept.filter((p, i) => i > 0 && !p.video).sort((a, b) => (lastScores.get(a.id)?.score ?? 0) - (lastScores.get(b.id)?.score ?? 0))[0];
+      if (!weakest) break;
+      kept = kept.filter((p) => p !== weakest);
+    }
   }
-  return { picks, clips: buildTimeline(ids, settings), droppedForLength, audioStart: null, highlight: null, coversSection: false };
+  if (!song) {
+    // Videos run 2–4 s, so the reel can run long: drop the weakest photos to fit.
+    const dur = (p: Photo) => (p.video ? Math.min(4, Math.max(2, p.video.end - p.video.start)) : settings.secondsPerPhoto);
+    while (kept.length > 1 && kept.reduce((a, p) => a + dur(p), 0) > settings.maxSeconds + 1e-6) {
+      const weakest = kept.filter((p, i) => i > 0 && !p.video).sort((a, b) => (lastScores.get(a.id)?.score ?? 0) - (lastScores.get(b.id)?.score ?? 0))[0];
+      if (!weakest) break;
+      kept = kept.filter((p) => p !== weakest);
+    }
+  }
+  const ids = kept.map((p) => p.id);
+  if (song && ids.length) {
+    const m = planMusicTimeline(videoSlots(ids, isVid), song.beats, settings, songStart, songPart);
+    return { picks: kept, clips: mergeSlots(m.clips), droppedForLength: droppedForLength + picks.length - kept.length, audioStart: m.audioStart, highlight: m.highlight, coversSection: m.coversSection };
+  }
+  // No music: a video plays its moment (2–4 s), photos the usual 1.5 s.
+  const durationOf = (id: string) => {
+    const v = byId.get(id)?.video;
+    return v ? Math.min(4, Math.max(2, v.end - v.start)) : settings.secondsPerPhoto;
+  };
+  return { picks: kept, clips: buildTimeline(ids, settings, durationOf), droppedForLength, audioStart: null, highlight: null, coversSection: false };
 }
 
 // ---- Grid ----------------------------------------------------------------------
@@ -857,6 +882,14 @@ function tile(p: Photo, state: ReturnType<typeof tileState>, start: number | und
   img.alt = p.name;
   img.loading = 'lazy';
   frame.append(img);
+  if (p.video) {
+    // Video: a play badge with the length of the moment used.
+    const badge = document.createElement('span');
+    badge.className = 'tile__video';
+    badge.textContent = `▶ ${(p.video.end - p.video.start).toFixed(1)}s`;
+    badge.title = `Video, ${p.video.duration.toFixed(1)} s; using ${p.video.start.toFixed(1)}–${p.video.end.toFixed(1)} s`;
+    frame.append(badge);
+  }
 
   const tc = document.createElement('span');
   tc.className = 'tile__tc';
@@ -1048,7 +1081,8 @@ el.make.addEventListener('click', async () => {
     const pct = total ? (done / total) * 100 : 0;
     el.progressFill.style.width = `${pct.toFixed(1)}%`;
     el.progressLabel.textContent = `${stage} · frame ${done} of ${total}`;
-  }, audio);
+    // Music → music only; no song → the videos keep their own sound.
+  }, audio, !song);
 
   try {
     const { blob, durationSec, audioCodec } = await job.promise;
@@ -1060,9 +1094,14 @@ el.make.addEventListener('click', async () => {
     el.video.src = resultUrl;
     el.download.href = resultUrl;
     el.download.download = resultFile.name;
-    el.resultMeta.textContent = `${timecode(durationSec)} · ${picks.length} photos · ${audioCodec ? 'with music' : 'silent'} · ${megabytes(blob.size)} · made in ${secs}s`;
+    const nVid = picks.filter((p) => p.video).length;
+    const what = nVid ? `${picks.length - nVid} photos + ${nVid} video${nVid === 1 ? '' : 's'}` : `${picks.length} photos`;
+    const sound = audioCodec ? (song ? 'with music' : "with the videos' sound") : 'silent';
+    el.resultMeta.textContent = `${timecode(durationSec)} · ${what} · ${sound} · ${megabytes(blob.size)} · made in ${secs}s`;
     el.video.muted = !audioCodec;
-    el.resultNote.textContent = audioCodec
+    el.resultNote.textContent = audioCodec && !song
+      ? "The videos' own sound plays under their clips; photos are silent. Add a song in Instagram if you like (lower the original sound there)."
+      : audioCodec
       ? 'The song is in the file. If Instagram mutes it for copyright, re-export silent and pick the song in Instagram instead.'
       : song
         ? `Silent, cut to the beat of ${song.name}. When posting, pick the same song in Instagram's music library and start it at ${timecode(audioStart ?? 0)}.`

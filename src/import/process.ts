@@ -17,8 +17,8 @@ const MASTER_EDGE = 2560;
 const DETAIL_EDGE = 640; // detection + sharpness/noise
 const SMALL_EDGE = 256; // exposure, dHash, thumbnail
 
-type PhotoMsg = Extract<ImportResponse, { type: 'photo' }>;
-type SkippedMsg = Extract<ImportResponse, { type: 'skipped' }>;
+export type PhotoMsg = Extract<ImportResponse, { type: 'photo' }>;
+export type SkippedMsg = Extract<ImportResponse, { type: 'skipped' }>;
 
 function scaled(src: { width: number; height: number }, edge: number) {
   const s = Math.min(1, edge / Math.max(src.width, src.height));
@@ -59,13 +59,55 @@ export function errorText(err: unknown): string {
  * after picking, or it's an online-only cloud file (iCloud / OneDrive / Google
  * Drive placeholder) that was never downloaded.
  */
-function unreadable(err: unknown): boolean {
+export function unreadable(err: unknown): boolean {
   const e = err as { name?: string; message?: string };
   return e?.name === 'NotReadableError' || /could not be read/i.test(e?.message ?? '');
 }
-const UNREADABLE_HELP = "Couldn't read this file from your device. Try picking it again; if it's an online-only cloud copy, download it first.";
+export const UNREADABLE_HELP = "Couldn't read this file from your device. Try picking it again; if it's an online-only cloud copy, download it first.";
+
+/**
+ * The copies the app keeps of a picture (render master, detection copy,
+ * thumbnail) plus its quality stats and fingerprint. Closes `full` if it's a bitmap.
+ */
+export async function copiesOf(
+  id: string,
+  full: CanvasImageSource & { width: number; height: number },
+  meta: { takenAt: number | null; lat: number | null; lon: number | null },
+  fallbackTime: number,
+): Promise<PhotoMsg> {
+  const width = full.width;
+  const height = full.height;
+  // Downscale in two steps; full-res bitmap is released right after the first.
+  const master = scaleOnly(full, MASTER_EDGE);
+  if (full instanceof ImageBitmap) full.close();
+  const detail = drawScaled(master, DETAIL_EDGE);
+  const small = drawScaled(detail.canvas, SMALL_EDGE);
+  const [thumb, detailBlob, masterBlob] = await Promise.all([
+    small.canvas.convertToBlob({ type: 'image/jpeg', quality: 0.8 }),
+    detail.canvas.convertToBlob({ type: 'image/jpeg', quality: 0.85 }),
+    master.convertToBlob({ type: 'image/jpeg', quality: 0.88 }),
+  ]);
+  return {
+    type: 'photo',
+    id,
+    takenAt: meta.takenAt ?? fallbackTime,
+    timeSource: meta.takenAt != null ? 'exif' : 'file',
+    lat: meta.lat,
+    lon: meta.lon,
+    width,
+    height,
+    thumb,
+    detail: detailBlob,
+    master: masterBlob,
+    stats: measureQuality(detail.gray, small.gray),
+    dhash: dhash(small.gray),
+  };
+}
+
+export const isVideoFile = (f: File) => f.type.startsWith('video/') || /\.(mov|mp4|m4v|webm)$/i.test(f.name);
 
 export async function processPhoto(id: string, file: File): Promise<PhotoMsg | SkippedMsg> {
+  if (isVideoFile(file)) return (await import('./video')).processVideo(id, file);
   let full: ImageBitmap;
   try {
     try {
@@ -81,37 +123,15 @@ export async function processPhoto(id: string, file: File): Promise<PhotoMsg | S
     return { type: 'skipped', id, name: file.name, reason };
   }
   try {
-    const width = full.width;
-    const height = full.height;
-    // Downscale in two steps; full-res bitmap is released right after the first.
-    const master = scaleOnly(full, MASTER_EDGE);
-    full.close();
-    const detail = drawScaled(master, DETAIL_EDGE);
-    const small = drawScaled(detail.canvas, SMALL_EDGE);
     const isHeif = await looksLikeHeif(file);
-    const [exif, thumb, detailBlob, masterBlob] = await Promise.all([
-      readExif(file, isHeif),
-      small.canvas.convertToBlob({ type: 'image/jpeg', quality: 0.8 }),
-      detail.canvas.convertToBlob({ type: 'image/jpeg', quality: 0.85 }),
-      master.convertToBlob({ type: 'image/jpeg', quality: 0.88 }),
-    ]);
-    return {
-      type: 'photo',
-      id,
-      takenAt: exif.takenAt ?? file.lastModified,
-      timeSource: exif.takenAt != null ? 'exif' : 'file',
-      lat: exif.lat,
-      lon: exif.lon,
-      width,
-      height,
-      thumb,
-      detail: detailBlob,
-      master: masterBlob,
-      stats: measureQuality(detail.gray, small.gray),
-      dhash: dhash(small.gray),
-    };
+    const exif = await readExif(file, isHeif);
+    return await copiesOf(id, full, { takenAt: exif.takenAt, lat: exif.lat, lon: exif.lon }, file.lastModified);
   } catch (err) {
-    full.close();
+    try {
+      full.close();
+    } catch {
+      /* already closed */
+    }
     const reason = unreadable(err) ? UNREADABLE_HELP : `Could not analyse this photo (${errorText(err)})`;
     return { type: 'skipped', id, name: file.name, reason };
   }

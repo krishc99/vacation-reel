@@ -7,8 +7,22 @@ import type { BeatAnalysis } from './audio/beats';
 import type { ReelAudio } from './audio/song';
 
 /** One imported photo, after EXIF read and thumbnail generation. */
+/** A video in the album: the best few seconds are used like a photo (poster = detail/master). */
+export interface VideoInfo {
+  /** The video file itself (kept in memory; decoded again at export). */
+  file: Blob;
+  /** Whole video length, seconds. */
+  duration: number;
+  /** The chosen moment, seconds into the video. */
+  start: number;
+  end: number;
+  hasAudio: boolean;
+}
+
 export interface Photo {
   id: string;
+  /** Present for videos. */
+  video?: VideoInfo;
   /** The picked file is not kept: the copies below are all the app needs after import (saves memory). */
   name: string;
   /** Capture time in ms since epoch. EXIF DateTimeOriginal if present, else file lastModified. */
@@ -128,6 +142,7 @@ export type ImportResponse =
       master: Blob;
       stats: QualityStats;
       dhash: DHash;
+      video?: VideoInfo;
     }
   | { type: 'skipped'; id: string; name: string; reason: string }
   | { type: 'ready' }
@@ -142,9 +157,20 @@ export type RenderRequest = {
   subjects: Record<string, import('./render/crop').Subject[]>;
   settings: ReelSettings;
   style: ReelStyle;
-  /** Song excerpt aligned to t = 0; absent = silent video. */
+  /** Song excerpt aligned to t = 0; absent = silent video (or the videos' own sound, see videoSound). */
   audio?: ReelAudio;
+  /** Video clips, keyed by photo id. */
+  videos?: Record<string, RenderVideo>;
+  /** No song: use the videos' own sound. */
+  videoSound?: boolean;
 };
+
+export interface RenderVideo {
+  file: Blob;
+  start: number;
+  end: number;
+  hasAudio: boolean;
+}
 
 export type AudioAnalysisRequest = { mono: Float32Array; sampleRate: number };
 export type AudioAnalysisResponse = { type: 'result'; analysis: BeatAnalysis } | { type: 'error'; message: string };

@@ -1,7 +1,7 @@
 import { subjectBoxes } from '../analysis/people';
 import type { ReelAudio } from '../audio/song';
 import type { Subject } from './crop';
-import type { Clip, Photo, ReelSettings, ReelStyle, RenderRequest, RenderResponse } from '../types';
+import type { Clip, Photo, ReelSettings, ReelStyle, RenderRequest, RenderResponse, RenderVideo } from '../types';
 import RenderWorker from '../workers/render.worker?worker';
 
 export interface RenderJob {
@@ -17,6 +17,8 @@ export function renderReel(
   style: ReelStyle,
   onProgress: (done: number, total: number, stage: string) => void,
   audio?: ReelAudio,
+  /** No song chosen: the videos keep their own sound. */
+  videoSound = false,
 ): RenderJob {
   const worker = new RenderWorker();
   let rejectFn: (e: Error) => void = () => {};
@@ -43,12 +45,14 @@ export function renderReel(
 
   const images: Record<string, Blob> = {};
   const subjects: Record<string, Subject[]> = {};
+  const videos: Record<string, RenderVideo> = {};
   for (const c of clips) {
     const p = photos.find((x) => x.id === c.photoId)!;
     images[c.photoId] = p.master;
     subjects[c.photoId] = subjectBoxes(p.people);
+    if (p.video) videos[c.photoId] = { file: p.video.file, start: p.video.start, end: p.video.end, hasAudio: p.video.hasAudio };
   }
-  const req: RenderRequest = { type: 'render', clips, images, subjects, settings, style, audio };
+  const req: RenderRequest = { type: 'render', clips, images, subjects, settings, style, audio, videos, videoSound };
   worker.postMessage(req, audio ? [audio.left.buffer, audio.right.buffer] : []);
 
   return {

@@ -238,6 +238,16 @@ lag           imageSim cached per embedding pair (WeakMap); pickChapter keeps ea
 speed         src/analysis/pool.ts runPool: N copies of a model worker on one queue; first downloads, the rest start after its 'ready' (browser cache). modelWorkers(): phones 1; computers min(by memory: people 3 / scenes 2 at ≥ 8 GB, 2 at ≥ 4 GB; by cores: floor((cores−2)/2)). findPeople/findScenes use it. Sandbox has 2 cores → no gain measurable here
 ```
 
+## 7p. Videos (Krish: "how can we add videos"; sound: song → music only, no song → the videos' own sound)
+```
+import        src/import/video.ts processVideo (in the import worker, via processPhoto when isVideoFile): Mediabunny Input/BlobSource; skip if no decodable video track (HEVC on some browsers) or > 1.5 GB. Samples ~2 fps (≤ 60) at 160 px: sharpness (subjectSharpness), motion (mean abs frame diff), luma → bestMoment(): 3.5 s window maximising sharp + .6·motion − dark, skipping the first .5 s; poster = sharpest frame in it, decoded ≤ 2560 → copiesOf() (shared with photos: master/detail/thumb/stats/dHash). Date from container metadata (else file date); no GPS yet. Photo.video = {file, duration, start, end, hasAudio}
+pipeline      Everything else (faces, scenes, scoring, framing, looks) uses the poster. Bursts never include videos. VIDEO_BOOST +.06. REEL.videoShare .25 cap in pickChapter
+timeline      Music: a video takes 2 beat slots (videoSlots → plan → mergeSlots); if slots exceed the length, weakest photos dropped. No music: video clip = its moment clamped 2–4 s; reel trimmed to maxSeconds by dropping weakest photos
+render        VideoPlayer (CanvasSink ≤ max(W,H), sequential canvases() iterator, re-seek on backwards jump); Shot.full swapped to the current frame each draw; no slow zoom on videos; moment shorter than its clip plays slower (≥ .5×). RenderRequest.videos + videoSound (= no song chosen): videoSound() decodes each clip's audio (AudioSampleSink, f32-planar, linear resample to 48 kHz, 30 ms fades) into the reel's audio track
+UI            accept video/*, .mov, .mp4 (iOS list adds video/quicktime, video/mp4); tile badge "▶ 3.5s"; result says "N photos + M videos", "with the videos' sound"; debug report has video fields
+verified      Headless Chromium has no H.264/HEVC decoding → tested with VP9/Opus WebM (synthetic): import, poster, moment, film-strip render with song, no-song export has sound only under the video clip
+```
+
 ## 7f. Milestone 6 scope — fun modes (plan)
 Funny (jawOpen/mouthPucker/cheekPuff/eyeWide*/browInnerUp high; wink OK, half-closed both = blink), Laugh (eyes closed + big smile + open jaw), Scenic from behind (shoulders, no nose/eyes; judge scenery sharpness + framing, people small), Jump/arms up (wrists above head; highest body frame in burst). Intentional vs accidental: shared or held deviations intentional; one person in one frame accidental. A burst can yield several keepers (one per mode). Mix ~1 fun per 4–5 classic, spread out (M7 sequencing).
 

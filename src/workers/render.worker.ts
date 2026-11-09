@@ -32,7 +32,9 @@ import {
 } from '../render/looks';
 import { MOTION, safeZoom, salientCentre, zoomAt, zoomed, zoomFor, type Box } from '../render/motion';
 import { timelineDuration } from '../render/timeline';
-import type { Caption, RenderRequest, RenderResponse } from '../types';
+import { ALL_FORMATS, AudioSampleSink, BlobSource, CanvasSink, Input, type WrappedCanvas } from 'mediabunny';
+import type { ReelAudio } from '../audio/song';
+import type { Caption, Clip, RenderRequest, RenderResponse, RenderVideo } from '../types';
 
 declare const self: DedicatedWorkerGlobalScope;
 type Ctx = OffscreenCanvasRenderingContext2D;
@@ -54,7 +56,9 @@ interface View {
 
 /** Everything needed to draw one clip at any size and moment. */
 interface Shot {
-  full: ImageBitmap;
+  /** The photo, or the video's current frame. */
+  full: ImageBitmap | OffscreenCanvas | HTMLCanvasElement;
+  video?: VideoPlayer;
   subjects: Subject[];
   keep: Box | null;
   /** Whole photo at ~48 px: scaled up, it is the blurred fill. */
@@ -69,8 +73,8 @@ interface Shot {
   views: Map<string, View>;
 }
 
-async function prepare(image: Blob, subjects: Subject[], seconds: number, screenW: number, screenH: number): Promise<Shot> {
-  const full = await createImageBitmap(image);
+async function prepare(image: Blob, subjects: Subject[], seconds: number, screenW: number, screenH: number, video?: VideoPlayer): Promise<Shot> {
+  const full: Shot['full'] = video ? await video.first() : await createImageBitmap(image);
   const long = Math.max(full.width, full.height);
   const tiny = new OffscreenCanvas(Math.max(1, Math.round((48 * full.width) / long)), Math.max(1, Math.round((48 * full.height) / long)));
   const tctx = tiny.getContext('2d')!;
@@ -102,7 +106,7 @@ async function prepare(image: Blob, subjects: Subject[], seconds: number, screen
         y1: Math.max(...subjects.map((b) => b.y + b.h)) * full.height,
       }
     : null;
-  return { full, subjects, keep, tiny, cols, rows, seconds, screenW, screenH, views: new Map() };
+  return { full, video, subjects, keep, tiny, cols, rows, seconds, screenW, screenH, views: new Map() };
 }
 
 /** Framing + zoom anchor for a w×h window (cached per size). */
@@ -404,6 +408,110 @@ function mixColor(a: string, b: string, u: number): string {
   return `hsl(${Math.round(pa[0] + dh * u)} ${Math.round(pa[1] + (pb[1] - pa[1]) * u)}% ${Math.round(pa[2] + (pb[2] - pa[2]) * u)}%)`;
 }
 
+// ---- Videos -----------------------------------------------------------------------------
+
+/** Plays a video's chosen moment frame by frame as the reel's clock moves forward. */
+class VideoPlayer {
+  private input: Input;
+  private sink: CanvasSink | null = null;
+  private iter: AsyncGenerator<WrappedCanvas, void, unknown> | null = null;
+  private cur: WrappedCanvas | null = null;
+  private nxt: WrappedCanvas | null = null;
+  constructor(
+    file: Blob,
+    readonly start: number,
+    readonly end: number,
+    private maxEdge: number,
+  ) {
+    this.input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
+  }
+  private async open(at: number) {
+    if (!this.sink) {
+      const track = await this.input.getPrimaryVideoTrack();
+      if (!track) throw new Error('video has no picture');
+      const long = Math.max(track.displayWidth, track.displayHeight);
+      const size = long > this.maxEdge ? (track.displayWidth >= track.displayHeight ? { width: this.maxEdge } : { height: this.maxEdge }) : {};
+      this.sink = new CanvasSink(track, size);
+    }
+    await this.iter?.return();
+    this.iter = this.sink.canvases(at);
+    this.cur = (await this.iter.next()).value ?? null;
+    this.nxt = (await this.iter.next()).value ?? null;
+  }
+  async first(): Promise<OffscreenCanvas | HTMLCanvasElement> {
+    await this.open(this.start);
+    if (!this.cur) throw new Error('could not read the video');
+    return this.cur.canvas;
+  }
+  /** Frame showing at `t` seconds into the video. */
+  async frameAt(t: number): Promise<OffscreenCanvas | HTMLCanvasElement> {
+    if (!this.cur || t < this.cur.timestamp - 0.1) await this.open(t);
+    while (this.nxt && this.nxt.timestamp <= t + 1e-3) {
+      this.cur = this.nxt;
+      this.nxt = (await this.iter!.next()).value ?? null;
+    }
+    return this.cur!.canvas;
+  }
+  close() {
+    void this.iter?.return();
+    this.input.dispose();
+  }
+}
+
+/**
+ * Sound for a reel without a song (Krish: music → music only; no music → the
+ * videos' own sound). Each video clip plays its moment's audio, with short fades.
+ */
+async function videoSound(clips: Clip[], videos: Record<string, RenderVideo>, total: number): Promise<ReelAudio | undefined> {
+  const SR = 48000;
+  const n = Math.ceil(total * SR);
+  const left = new Float32Array(n);
+  const right = new Float32Array(n);
+  let any = false;
+  for (const c of clips) {
+    const v = videos[c.photoId];
+    if (!v?.hasAudio) continue;
+    const input = new Input({ source: new BlobSource(v.file), formats: ALL_FORMATS });
+    try {
+      const track = await input.getPrimaryAudioTrack();
+      if (!track || !(await track.canDecode())) continue;
+      const sink = new AudioSampleSink(track);
+      const from = c.start;
+      const to = Math.min(c.start + c.duration, total);
+      const fade = Math.min(0.03, c.duration / 4) * SR;
+      for await (const smp of sink.samples(v.start, v.start + (to - from))) {
+        const frames = smp.numberOfFrames;
+        const planes = Array.from({ length: Math.min(2, smp.numberOfChannels) }, (_, ch) => {
+          const buf = new Float32Array(frames);
+          smp.copyTo(buf, { planeIndex: ch, format: 'f32-planar' });
+          return buf;
+        });
+        const at = from + (smp.timestamp - v.start); // reel seconds of this chunk
+        const sr = smp.sampleRate;
+        const o0 = Math.max(Math.ceil(at * SR), Math.ceil(from * SR));
+        const o1 = Math.min(Math.floor((at + frames / sr) * SR), Math.floor(to * SR), n);
+        for (let o = o0; o < o1; o++) {
+          const x = (o / SR - at) * sr; // linear resample
+          const i = Math.floor(x);
+          const f = x - i;
+          const get = (p: Float32Array) => (p[i] ?? 0) * (1 - f) + (p[i + 1] ?? p[i] ?? 0) * f;
+          const env = Math.min(1, (o - from * SR) / fade, (to * SR - o) / fade);
+          const l = get(planes[0]) * env;
+          left[o] += l;
+          right[o] += planes[1] ? get(planes[1]) * env : l;
+        }
+        smp.close();
+        any = true;
+      }
+    } catch {
+      /* this clip stays silent */
+    } finally {
+      input.dispose();
+    }
+  }
+  return any ? { left, right, sampleRate: SR } : undefined;
+}
+
 // ---- Shared text helpers ---------------------------------------------------------------
 
 const SANS = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
@@ -435,7 +543,8 @@ function roundRect(ctx: Ctx, x: number, y: number, w: number, h: number, r: numb
 
 self.onmessage = async (e: MessageEvent<RenderRequest>) => {
   if (e.data.type !== 'render') return;
-  const { clips, images, subjects, settings: s, style, audio } = e.data;
+  const { clips, images, subjects, settings: s, style, videos = {}, videoSound: withVideoSound } = e.data;
+  let audio = e.data.audio;
   const W = s.width;
   const H = s.height;
   const look = style.look ?? 'clean';
@@ -446,6 +555,10 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
   let enc: FrameEncoder | null = null;
   const shots = new Map<number, Shot>();
   try {
+    if (!audio && withVideoSound && Object.keys(videos).length) {
+      post({ type: 'progress', done: 0, total: 1, stage: 'Reading video sound' });
+      audio = await videoSound(clips, videos, timelineDuration(clips));
+    }
     enc = await createEncoder(s, audio);
     const ctx = enc.canvas.getContext('2d', { alpha: false })!;
     const layer = new OffscreenCanvas(W, H);
@@ -488,15 +601,31 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
       const [a, b] = span(k);
       return (t - a) / Math.max(1e-3, b - a);
     };
-    const shot = async (k: number) => {
+    const shot = async (k: number, t?: number) => {
       let v = shots.get(k);
+      const c = clips[k];
+      const vid = videos[c.photoId];
+      const [a, b] = span(k);
       if (!v) {
-        const c = clips[k];
-        const [a, b] = span(k);
-        v = await prepare(images[c.photoId], subjects[c.photoId] ?? [], b - a, W, H);
+        // Videos don't get the slow zoom (seconds 0): the camera already moves.
+        const player = vid ? new VideoPlayer(vid.file, vid.start, vid.end, Math.max(W, H)) : undefined;
+        v = await prepare(images[c.photoId], subjects[c.photoId] ?? [], vid ? 0 : b - a, W, H, player);
         shots.set(k, v);
       }
+      if (v.video && t !== undefined) {
+        // Video time for reel time t: its moment from the start of the clip; a
+        // moment shorter than the clip plays a little slower (never below half speed).
+        const len = Math.max(1e-3, b - a);
+        const seg = v.video.end - v.video.start;
+        const speed = seg >= len ? 1 : Math.max(0.5, seg / len);
+        const vt = Math.min(v.video.end - 0.02, v.video.start + Math.max(0, t - a) * speed);
+        v.full = await v.video.frameAt(vt);
+      }
       return v;
+    };
+    const release = (v: Shot) => {
+      if (v.video) v.video.close();
+      else (v.full as ImageBitmap).close?.();
     };
     const punch = (k: number, t: number) => (motion && k > 0 && clips[k].transition !== 'fade' ? punchAt(t - starts[k]) : 1);
 
@@ -514,9 +643,9 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
         b = i + 1;
         alpha = (t - (ends[i] - half)) / MOTION.fade;
       }
-      drawInto(ctx, await shot(a), a, progress(a, t), FULL, motion, punch(a, t));
+      drawInto(ctx, await shot(a, t), a, progress(a, t), FULL, motion, punch(a, t));
       if (b >= 0 && alpha > 0) {
-        drawInto(lctx, await shot(b), b, progress(b, t), FULL, motion);
+        drawInto(lctx, await shot(b, t), b, progress(b, t), FULL, motion);
         ctx.save();
         ctx.globalAlpha = Math.min(1, alpha);
         ctx.drawImage(layer, 0, 0);
@@ -529,7 +658,7 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
       const fs = strip!;
       const pos = stripPosition(starts, t);
       const cur = Math.min(clips.length - 1, Math.round(pos));
-      drawBlur(ctx, await shot(cur), FULL, 0.55);
+      drawBlur(ctx, await shot(cur, t), FULL, 0.55);
       // Moving: the strip swings a few degrees on each beat, breathes in scale, and
       // weaves slightly like film in a projector gate.
       const k0 = Math.floor(pos);
@@ -559,7 +688,7 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
             ? { x: fs.cross0 + fs.margin, y: c - l / 2, w: fs.frame.w, h: l }
             : { x: c - l / 2, y: fs.cross0 + fs.margin, w: l, h: fs.frame.h };
           if ((fs.vertical ? r.y + r.h : r.x + r.w) < -len * 0.3 || (fs.vertical ? r.y : r.x) > len * 1.3) continue;
-          drawInto(ctx, await shot(k), k, progress(k, t), r, motion);
+          drawInto(ctx, await shot(k, t), k, progress(k, t), r, motion);
           // Frames not yet "exposed" are dimmer.
           if (k > Math.round(p)) {
             ctx.fillStyle = 'rgba(10,6,2,0.35)';
@@ -643,7 +772,7 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
           ctx.fillRect(cell.x, cell.y, cell.w, cell.h);
           continue;
         }
-        drawInto(ctx, await shot(k), k, progress(k, t), cell, motion);
+        drawInto(ctx, await shot(k, t), k, progress(k, t), cell, motion);
         const f = flashAt(t - starts[k], 0.9, LOOKS.boothFlashSec);
         if (f > 0) {
           ctx.fillStyle = `rgba(255,255,255,${f})`;
@@ -670,9 +799,9 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
       const u = entering !== null ? (t - (starts[i + 1] - LOOKS.slideSec)) / LOOKS.slideSec : 0;
       const restRot = (n: number) => ((n % 2 ? 1 : -1) * 1.6 * Math.PI) / 180;
       if (!g) {
-        drawInto(ctx, await shot(i), i, progress(i, t), FULL, motion, punch(i, t));
+        drawInto(ctx, await shot(i, t), i, progress(i, t), FULL, motion, punch(i, t));
       } else {
-        drawBlur(ctx, await shot(i), FULL, 0.4);
+        drawBlur(ctx, await shot(i, t), FULL, 0.4);
         const out = entering !== null ? easeOutCubic(u) : 0;
         await drawBoothStrip(t, g.strip, -out * W * 1.2, restRot(g.strip) - out * 0.15);
       }
@@ -686,9 +815,9 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
     const drawMagazine = async (t: number, i: number) => {
       const m = mag!;
       // Colours from the photo itself, eased in over the cut.
-      const target = paletteOf(await shot(i));
+      const target = paletteOf(await shot(i, t));
       const since = t - starts[i];
-      const prev = i > 0 ? paletteOf(await shot(i - 1)) : target;
+      const prev = i > 0 ? paletteOf(await shot(i - 1, t)) : target;
       const u = motion ? easeOutCubic(since / 0.35) : 1;
       const bg = mixColor(prev.bg, target.bg, u);
       const ink = mixColor(prev.ink, target.ink, u);
@@ -717,7 +846,7 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
       ctx.fillStyle = bg;
       ctx.fillRect(photo.x, photo.y, photo.w, photo.h);
       ctx.restore();
-      drawInto(ctx, await shot(i), i, progress(i, t), photo, motion, punch(i, t));
+      drawInto(ctx, await shot(i, t), i, progress(i, t), photo, motion, punch(i, t));
       // Issue line under the photo.
       ctx.save();
       ctx.fillStyle = ink;
@@ -747,7 +876,7 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
     // -- split-screen photo dump --
     const drawSplit = async (t: number, i: number) => {
       const page = pageOf.get(i) ?? [i];
-      if (page.length === 1) return drawInto(ctx, await shot(i), i, progress(i, t), FULL, motion, punch(i, t));
+      if (page.length === 1) return drawInto(ctx, await shot(i, t), i, progress(i, t), FULL, motion, punch(i, t));
       const { variant, entry } = splitVariant(pages.indexOf(page), page.length);
       const step = page.indexOf(i);
       const now = splitLayout(page.length, step, vertical, variant);
@@ -766,7 +895,7 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
         const x1 = (r.x + r.w) * W - (r.x + r.w < 0.999 ? g / 2 : 0);
         const y1 = (r.y + r.h) * H - (r.y + r.h < 0.999 ? g / 2 : 0);
         const k = page[j];
-        drawInto(ctx, await shot(k), k, progress(k, t), { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }, motion);
+        drawInto(ctx, await shot(k, t), k, progress(k, t), { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }, motion);
       }
     };
 
@@ -775,7 +904,7 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
     for (let frame = 0; frame < totalFrames; frame++) {
       const t = (frame + 0.5) * frameDur;
       while (i + 1 < clips.length && t >= starts[i + 1]) i++;
-      for (const k of [...shots.keys()]) if (k < i - 3) (shots.get(k)!.full.close(), shots.delete(k));
+      for (const k of [...shots.keys()]) if (k < i - 3) (release(shots.get(k)!), shots.delete(k));
       const c = clips[i];
 
       if (look === 'filmstrip') await drawStrip(t, frame);
@@ -806,6 +935,6 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
     await enc?.cancel().catch(() => {});
     post({ type: 'error', message: err instanceof Error ? err.message : String(err) });
   } finally {
-    for (const v of shots.values()) v.full.close();
+    for (const v of shots.values()) (v.video ? v.video.close() : (v.full as ImageBitmap).close?.());
   }
 };
