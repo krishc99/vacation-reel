@@ -25,6 +25,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+        env:
+          # Free Google API key (Drive API only, restricted to this site) for "paste a Drive link".
+          VITE_GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
