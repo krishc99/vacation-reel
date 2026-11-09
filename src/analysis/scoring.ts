@@ -19,8 +19,10 @@ export const SCORE_WEIGHTS = { Q: 0.15, F: 0.25, C: 0.15, M: 0.45 };
  * Once you've marked yourself: photos with you get a lift; solo photos of
  * someone else (just them, not you) drop. Groups without you are unchanged.
  */
-export const ME_BOOST = 0.12;
+export const ME_BOOST = 0.2;
 export const SOLO_OTHER_PENALTY = 0.3;
+/** At least half the faces covered (hands over face). */
+export const COVERED_PENALTY = 0.25;
 
 export interface PhotoScore {
   Q: number;
@@ -132,6 +134,10 @@ export function scorePhotos(photos: Photo[], ctx: ScoreContext, w = SCORE_WEIGHT
       if (friends.includes(me)) adj = ME_BOOST;
       else if (friends.length === 1 && (p.people?.count ?? 0) <= 1) adj = -SOLO_OTHER_PENALTY;
     }
+    // Faces hidden behind hands etc.: mostly-covered photos drop.
+    const faces = p.people?.faces ?? [];
+    const hidden = faces.filter((f) => f.covered).length;
+    if (faces.length && hidden * 2 >= faces.length) adj -= COVERED_PENALTY;
     out.set(p.id, {
       Q: pQ[i],
       F: pF[i],

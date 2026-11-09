@@ -55,6 +55,8 @@ export function frameFor(
   salient: { x: number; y: number } | null = null,
   /** Small cells (split screen, booth) can crop harder than the full frame. */
   maxCoverLoss = FRAMING.maxCoverLoss,
+  /** With people: also fall back to the whole photo if filling would cut more than this (cells guard against missed people). */
+  peopleMaxLoss = Infinity,
 ): Framing {
   const cover = centerCoverCrop(srcW, srcH, dstW, dstH);
   const loss = 1 - Math.min(cover.sw / srcW, cover.sh / srcH);
@@ -64,7 +66,7 @@ export function frameFor(
     const y0 = Math.min(...subjects.map((b) => b.y)) * srcH;
     const x1 = Math.max(...subjects.map((b) => b.x + b.w)) * srcW;
     const y1 = Math.max(...subjects.map((b) => b.y + b.h)) * srcH;
-    if (x1 - x0 <= cover.sw * 0.96 && y1 - y0 <= cover.sh * 0.96) {
+    if (x1 - x0 <= cover.sw * 0.96 && y1 - y0 <= cover.sh * 0.96 && loss <= peopleMaxLoss) {
       const cx = (x0 + x1) / 2;
       const cy = (y0 + y1) / 2;
       const sx = Math.min(srcW - cover.sw, Math.max(0, cx - cover.sw / 2));

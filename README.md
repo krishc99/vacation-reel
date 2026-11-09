@@ -91,3 +91,4 @@ Firefox desktop 130+ has WebCodecs; Firefox Android does not. Unsupported browse
 ## Credits
 
 Place names: [GeoNames](https://www.geonames.org/) (CC BY 4.0), trimmed to towns with ≥ 5000 people (`scripts/places.mjs`).
+Face finder: [YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet) (MIT) and face recognition: SFace (Apache-2.0), both from OpenCV Zoo.

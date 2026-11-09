@@ -88,40 +88,73 @@ export async function listDrive(link: string, key = DRIVE_KEY, f: Fetch = fetch,
   return out;
 }
 
-/** Downloads 3 at a time (2 retries each) into memory as File objects. */
+export const DRIVE_DOWNLOAD = {
+  /** Parallel downloads. Google starts refusing anonymous downloads (403, no CORS header) when pushed. */
+  lanes: 2,
+  /** Tries per photo, spread over the whole run (a refused photo goes to the back of the queue). */
+  tries: 6,
+  /** After a refusal every lane waits this long, doubling up to maxPauseMs; successes shrink it again. */
+  pauseMs: 2000,
+  maxPauseMs: 30000,
+};
+
+/**
+ * Downloads into memory as File objects. Google rate-limits anonymous
+ * downloads of shared files; a refusal arrives as a 403 without a CORS header,
+ * which the browser reports only as "Failed to fetch". So: few lanes, and on
+ * any refusal everybody pauses (backing off), and the photo is retried later.
+ */
 export async function downloadDrive(
   files: DriveFile[],
-  onProgress: (done: number, total: number) => void,
+  onProgress: (done: number, total: number, waitingSec: number) => void,
   key = DRIVE_KEY,
   f: Fetch = fetch,
+  o = DRIVE_DOWNLOAD,
 ): Promise<{ files: File[]; failed: { name: string; reason: string }[] }> {
   const got: (File | null)[] = new Array(files.length).fill(null);
-  const failed: { name: string; reason: string }[] = [];
-  let next = 0;
+  const tries = new Array(files.length).fill(0);
+  const lastErr: string[] = new Array(files.length).fill('');
+  const queue = files.map((_, i) => i);
   let done = 0;
+  let pause = 0;
+  let resumeAt = 0;
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   const lane = async () => {
-    while (next < files.length) {
-      const i = next++;
-      const d = files[i];
-      let lastErr = '';
-      for (let attempt = 0; attempt < 3 && !got[i]; attempt++) {
-        try {
-          const r = await f(`${API}/${d.id}?alt=media&supportsAllDrives=true&key=${encodeURIComponent(key)}`);
-          if (!r.ok) throw await failure(r, d.name);
-          const blob = await r.blob();
-          got[i] = new File([blob], d.name, {
-            type: d.mimeType.startsWith('image/') ? d.mimeType : blob.type,
-            lastModified: d.modifiedTime ? Date.parse(d.modifiedTime) : Date.now(),
-          });
-        } catch (err) {
-          lastErr = (err as Error).message;
-          if (attempt < 2) await new Promise((res) => setTimeout(res, 500 * (attempt + 1)));
-        }
+    for (;;) {
+      const i = queue.shift();
+      if (i === undefined) return;
+      const wait = resumeAt - Date.now();
+      if (wait > 0) {
+        onProgress(done, files.length, Math.ceil(wait / 1000));
+        await sleep(wait);
       }
-      if (!got[i]) failed.push({ name: d.name, reason: `Couldn't download from Drive: ${lastErr}` });
-      onProgress(++done, files.length);
+      const d = files[i];
+      tries[i]++;
+      try {
+        const r = await f(`${API}/${d.id}?alt=media&supportsAllDrives=true&key=${encodeURIComponent(key)}`);
+        if (!r.ok) throw await failure(r, d.name);
+        const blob = await r.blob();
+        got[i] = new File([blob], d.name, {
+          type: d.mimeType.startsWith('image/') ? d.mimeType : blob.type,
+          lastModified: d.modifiedTime ? Date.parse(d.modifiedTime) : Date.now(),
+        });
+        pause = Math.max(0, pause / 2 - 250);
+        onProgress(++done, files.length, 0);
+      } catch (err) {
+        lastErr[i] = (err as Error).message;
+        const missing = /not found/i.test(lastErr[i]);
+        if (!missing) {
+          pause = Math.min(o.maxPauseMs, pause ? pause * 2 : o.pauseMs);
+          resumeAt = Math.max(resumeAt, Date.now() + pause);
+        }
+        if (!missing && tries[i] < o.tries) queue.push(i);
+        else onProgress(++done, files.length, 0);
+      }
     }
   };
-  await Promise.all([lane(), lane(), lane()]);
+  await Promise.all(Array.from({ length: o.lanes }, lane));
+  const failed = files
+    .map((d, i) => (got[i] ? null : { name: d.name, reason: `Couldn't download from Drive after ${tries[i]} tries: ${/Failed to fetch/i.test(lastErr[i]) ? 'Google refused (too many downloads at once). Add the same link again later to fetch the rest; photos already added are skipped' : lastErr[i]}` }))
+    .filter((x): x is { name: string; reason: string } => x !== null);
   return { files: got.filter((x): x is File => x !== null), failed };
 }

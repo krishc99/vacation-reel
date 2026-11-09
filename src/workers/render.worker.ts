@@ -13,8 +13,14 @@ import {
   leakAt,
   lerpRect,
   LOOKS,
-  MAG_PALETTE,
   magazine,
+  magPhoto,
+  alongAt,
+  stripLayout,
+  splitVariant,
+  entryFrom,
+  jitter,
+  PEOPLE_LOSS,
   OVERLAY_CAPTIONS,
   punchAt,
   sparkles,
@@ -58,10 +64,12 @@ interface Shot {
   rows: Float32Array;
   /** Seconds on screen: sets how far it zooms. */
   seconds: number;
+  screenW: number;
+  screenH: number;
   views: Map<string, View>;
 }
 
-async function prepare(image: Blob, subjects: Subject[], seconds: number): Promise<Shot> {
+async function prepare(image: Blob, subjects: Subject[], seconds: number, screenW: number, screenH: number): Promise<Shot> {
   const full = await createImageBitmap(image);
   const long = Math.max(full.width, full.height);
   const tiny = new OffscreenCanvas(Math.max(1, Math.round((48 * full.width) / long)), Math.max(1, Math.round((48 * full.height) / long)));
@@ -94,24 +102,25 @@ async function prepare(image: Blob, subjects: Subject[], seconds: number): Promi
         y1: Math.max(...subjects.map((b) => b.y + b.h)) * full.height,
       }
     : null;
-  return { full, subjects, keep, tiny, cols, rows, seconds, views: new Map() };
+  return { full, subjects, keep, tiny, cols, rows, seconds, screenW, screenH, views: new Map() };
 }
 
 /** Framing + zoom anchor for a w×h window (cached per size). */
 let coverLoss: number | undefined;
+let peopleLoss: number | undefined;
 
-function viewOf(s: Shot, w: number, h: number, motion: boolean): View {
-  const key = `${Math.round(w)}x${Math.round(h)}`;
+function viewOf(s: Shot, w: number, h: number, motion: boolean, cell: boolean): View {
+  const key = `${Math.round(w)}x${Math.round(h)}${cell ? 'c' : ''}`;
   const hit = s.views.get(key);
   if (hit) return hit;
   const fw = s.full.width;
   const fh = s.full.height;
-  let framing = frameFor(fw, fh, w, h, s.subjects, null, coverLoss);
+  let framing = frameFor(fw, fh, w, h, s.subjects, null, cell ? coverLoss : undefined, cell ? peopleLoss : undefined);
   if (!s.subjects.length && framing.mode === 'cover') {
     const sx = framing.crop.sw / fw;
     const sy = framing.crop.sh / fh;
     if (sx < 0.97 || sy < 0.97)
-      framing = frameFor(fw, fh, w, h, [], { x: sx < 0.97 ? salientCentre(s.cols, sx) : 0.5, y: sy < 0.97 ? salientCentre(s.rows, sy) : 0.5 }, coverLoss);
+      framing = frameFor(fw, fh, w, h, [], { x: sx < 0.97 ? salientCentre(s.cols, sx) : 0.5, y: sy < 0.97 ? salientCentre(s.rows, sy) : 0.5 }, cell ? coverLoss : undefined);
   }
   const win = framing.crop;
   const k = s.keep;
@@ -129,7 +138,9 @@ function drawInto(ctx: Ctx, s: Shot, index: number, u: number, r: Rect, motion: 
   if (r.w < 2 || r.h < 2) return;
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
-  const v = viewOf(s, r.w, r.h, motion);
+  // Full-screen photos keep the normal framing rules; smaller cells use the look's.
+  const cell = r.w < s.screenW - 1 || r.h < s.screenH - 1;
+  const v = viewOf(s, r.w, r.h, motion, cell);
   const f = v.framing;
   const z = (v.z > 1.0005 ? zoomAt(index, v.z, clamp01(u)) : 1) * extra;
   const src: CropRect = z > 1.0005 ? zoomed(f.crop, v.ax, v.ay, z) : f.crop;
@@ -325,6 +336,74 @@ function grainOver(ctx: Ctx, kit: FilmKit, frame: number, alpha: number, w: numb
 }
 
 
+// ---- Colours from a photo (magazine) --------------------------------------------------
+
+interface Palette {
+  bg: string;
+  ink: string;
+  accent: string;
+}
+const palettes = new WeakMap<Shot, Palette>();
+
+function hsl(h: number, s: number, l: number): string {
+  return `hsl(${Math.round(h)} ${Math.round(s * 100)}% ${Math.round(l * 100)}%)`;
+}
+
+/**
+ * Background from the photo's own mood: its average hue, softened; light photos
+ * get a pale paper of that hue, dark ones a deep shade. Title colour = the
+ * photo's most vivid hue, kept readable.
+ */
+function paletteOf(s: Shot): Palette {
+  const hit = palettes.get(s);
+  if (hit) return hit;
+  const c = s.tiny.getContext('2d')!;
+  const d = c.getImageData(0, 0, s.tiny.width, s.tiny.height).data;
+  let x = 0;
+  let y = 0;
+  let wsum = 0;
+  let light = 0;
+  let vivid = { sat: -1, hue: 30 };
+  const n = d.length / 4;
+  for (let i = 0; i < n; i++) {
+    const r = d[4 * i] / 255;
+    const g = d[4 * i + 1] / 255;
+    const b = d[4 * i + 2] / 255;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const l = (max + min) / 2;
+    const sat = max === min ? 0 : (max - min) / (1 - Math.abs(2 * l - 1));
+    let h = 0;
+    if (max !== min) h = max === r ? 60 * (((g - b) / (max - min) + 6) % 6) : max === g ? 60 * ((b - r) / (max - min) + 2) : 60 * ((r - g) / (max - min) + 4);
+    light += l;
+    // Hue average on the circle, weighted by saturation.
+    const w = sat * (1 - Math.abs(2 * l - 1));
+    x += Math.cos((h * Math.PI) / 180) * w;
+    y += Math.sin((h * Math.PI) / 180) * w;
+    wsum += w;
+    if (w > vivid.sat && l > 0.2 && l < 0.8) vivid = { sat: w, hue: h };
+  }
+  const hue = wsum > 1e-3 ? ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360 : 35;
+  const chroma = Math.min(1, wsum / n / 0.25);
+  const dark = light / n < 0.38;
+  const p: Palette = dark
+    ? { bg: hsl(hue, 0.18 + 0.2 * chroma, 0.14), ink: hsl(hue, 0.25, 0.9), accent: hsl(vivid.hue, 0.55, 0.72) }
+    : { bg: hsl(hue, 0.2 + 0.25 * chroma, 0.88), ink: hsl(hue, 0.3, 0.14), accent: hsl(vivid.hue, 0.55, 0.32) };
+  palettes.set(s, p);
+  return p;
+}
+
+/** Mix two hsl() colours (shortest way round the hue circle). */
+function mixColor(a: string, b: string, u: number): string {
+  if (u >= 1 || a === b) return b;
+  const pa = a.match(/[\d.]+/g)!.map(Number);
+  const pb = b.match(/[\d.]+/g)!.map(Number);
+  let dh = pb[0] - pa[0];
+  if (dh > 180) dh -= 360;
+  if (dh < -180) dh += 360;
+  return `hsl(${Math.round(pa[0] + dh * u)} ${Math.round(pa[1] + (pb[1] - pa[1]) * u)}% ${Math.round(pa[2] + (pb[2] - pa[2]) * u)}%)`;
+}
+
 // ---- Shared text helpers ---------------------------------------------------------------
 
 const SANS = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
@@ -363,6 +442,7 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
   const motion = style.motion;
   const vertical = H >= W;
   coverLoss = COVER_LOSS[look];
+  peopleLoss = PEOPLE_LOSS[look];
   let enc: FrameEncoder | null = null;
   const shots = new Map<number, Shot>();
   try {
@@ -383,20 +463,13 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
         ? { grain: [1, 2, 3, 4].map((k) => makeGrain(W, H, k)), vignette: makeVignette(W, H, look === 'film' ? 0.5 : 0.35), cuts: starts.slice(1) }
         : null;
     const strip = look === 'filmstrip' ? filmStrip(W, H) : null;
+    const stripGeo = strip ? stripLayout(strip, clips.map((c) => style.aspects?.[c.photoId] ?? 0.75)) : null;
     const boothBox = look === 'booth' ? booth(W, H) : null;
     const groups = look === 'booth' ? boothGroups(clips.length) : [];
     const mag = look === 'magazine' ? magazine(W, H) : null;
     const pages = look === 'split' ? splitPages(clips.map((c) => c.duration), starts, accents) : [];
     const pageOf = new Map<number, number[]>();
     for (const p of pages) for (const k of p) pageOf.set(k, p);
-    // Magazine: a new colour each time the cover title (place/day) changes.
-    const palette: number[] = [];
-    clips.forEach((c, k) => {
-      const prev = k ? palette[k - 1] : -1;
-      const changed = k === 0 || style.titles[c.photoId] !== style.titles[clips[k - 1].photoId];
-      palette.push(changed ? (prev + 1) % MAG_PALETTE.length : prev);
-    });
-
     const fadeIn = (k: number) => (look === 'clean' || look === 'film') && k > 0 && clips[k].transition === 'fade';
     // When each photo starts and stops being on screen (drives the zoom).
     const span = (k: number): [number, number] => {
@@ -420,7 +493,7 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
       if (!v) {
         const c = clips[k];
         const [a, b] = span(k);
-        v = await prepare(images[c.photoId], subjects[c.photoId] ?? [], b - a);
+        v = await prepare(images[c.photoId], subjects[c.photoId] ?? [], b - a, W, H);
         shots.set(k, v);
       }
       return v;
@@ -457,51 +530,94 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
       const pos = stripPosition(starts, t);
       const cur = Math.min(clips.length - 1, Math.round(pos));
       drawBlur(ctx, await shot(cur), FULL, 0.55);
-      const along = (k: number) => fs.centre + (k - pos) * fs.pitch;
-      // The strip band, running past both ends of the screen.
-      ctx.fillStyle = '#16110d';
-      if (fs.vertical) ctx.fillRect(fs.cross0, 0, fs.cross, H);
-      else ctx.fillRect(0, fs.cross0, W, fs.cross);
-      const len = fs.vertical ? H : W;
-      for (let k = Math.max(0, Math.floor(pos) - 3); k <= Math.min(clips.length - 1, Math.ceil(pos) + 3); k++) {
-        const c = along(k);
-        const r: Rect = fs.vertical
-          ? { x: fs.cross0 + fs.margin, y: c - fs.frame.h / 2, w: fs.frame.w, h: fs.frame.h }
-          : { x: c - fs.frame.w / 2, y: fs.cross0 + fs.margin, w: fs.frame.w, h: fs.frame.h };
-        if ((fs.vertical ? r.y + r.h : r.x + r.w) < 0 || (fs.vertical ? r.y : r.x) > len) continue;
-        drawInto(ctx, await shot(k), k, progress(k, t), r, motion);
-        // Edge printing: frame numbers in the margins, like real film.
+      // Moving: the strip swings a few degrees on each beat, breathes in scale, and
+      // weaves slightly like film in a projector gate.
+      const k0 = Math.floor(pos);
+      const swing = (n: number) => jitter(n, 31) * 0.07; // radians, about ±4°
+      const su = pos - k0;
+      const rot = motion ? swing(k0) + (swing(k0 + 1) - swing(k0)) * easeOutCubic(su) : 0;
+      const sinceLand = t - starts[Math.min(clips.length - 1, Math.max(0, Math.ceil(pos - 1e-3)))];
+      const push = motion ? 1 + 0.035 * Math.exp(-Math.max(0, sinceLand) / 0.18) * (sinceLand >= 0 ? 1 : 0) : 1;
+      const weave = motion ? Math.sin(t * 23) * 0.0015 * W + Math.sin(t * 7.3) * 0.002 * W : 0;
+      const drawBand = async (p: number, alpha: number) => {
         ctx.save();
-        ctx.fillStyle = '#e39b3a';
-        const px = Math.round(fs.margin * 0.26);
-        ctx.font = `700 ${px}px ${MONO}`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        const label = `▸ ${k + 1}A`;
-        if (fs.vertical) {
-          ctx.translate(fs.cross0 + fs.margin * 0.16, c);
-          ctx.rotate(-Math.PI / 2);
-          ctx.fillText(label, 0, 0);
-          ctx.setTransform(1, 0, 0, 1, fs.cross0 + fs.cross - fs.margin * 0.16, c + fs.frame.h * 0.3);
-          ctx.rotate(Math.PI / 2);
-          ctx.fillText(`VR 400   ${k + 1}`, 0, 0);
-        } else {
-          ctx.fillText(label, c, fs.cross0 + fs.margin * 0.16);
-          ctx.fillText(`VR 400   ${k + 1}`, c + fs.frame.w * 0.3, fs.cross0 + fs.cross - fs.margin * 0.16);
+        ctx.globalAlpha = alpha;
+        ctx.translate(W / 2 + (fs.vertical ? weave : 0), H / 2 + (fs.vertical ? 0 : weave));
+        ctx.rotate(rot);
+        ctx.scale(push * 1.08, push * 1.08); // a little larger so the tilted strip still runs off both ends
+        ctx.translate(-W / 2, -H / 2);
+        const off = fs.centre - alongAt(stripGeo!.centres, p);
+        const along = (k: number) => stripGeo!.centres[k] + off;
+        const len = fs.vertical ? H : W;
+        ctx.fillStyle = '#16110d';
+        if (fs.vertical) ctx.fillRect(fs.cross0, -H, fs.cross, 3 * H);
+        else ctx.fillRect(-W, fs.cross0, 3 * W, fs.cross);
+        for (let k = Math.max(0, Math.floor(p) - 3); k <= Math.min(clips.length - 1, Math.ceil(p) + 3); k++) {
+          const c = along(k);
+          const l = stripGeo!.lengths[k];
+          const r: Rect = fs.vertical
+            ? { x: fs.cross0 + fs.margin, y: c - l / 2, w: fs.frame.w, h: l }
+            : { x: c - l / 2, y: fs.cross0 + fs.margin, w: l, h: fs.frame.h };
+          if ((fs.vertical ? r.y + r.h : r.x + r.w) < -len * 0.3 || (fs.vertical ? r.y : r.x) > len * 1.3) continue;
+          drawInto(ctx, await shot(k), k, progress(k, t), r, motion);
+          // Frames not yet "exposed" are dimmer.
+          if (k > Math.round(p)) {
+            ctx.fillStyle = 'rgba(10,6,2,0.35)';
+            ctx.fillRect(r.x, r.y, r.w, r.h);
+          }
+          ctx.save();
+          ctx.fillStyle = '#e39b3a';
+          const px = Math.round(fs.margin * 0.26);
+          ctx.font = `700 ${px}px ${MONO}`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          if (fs.vertical) {
+            ctx.translate(fs.cross0 + fs.margin * 0.16, c);
+            ctx.rotate(-Math.PI / 2);
+            ctx.fillText(`▸ ${k + 1}A`, 0, 0);
+            ctx.rotate(Math.PI / 2);
+            ctx.translate(fs.cross - fs.margin * 0.32, l * 0.3);
+            ctx.rotate(Math.PI / 2);
+            ctx.fillText(`VR 400   ${k + 1}`, 0, 0);
+          } else {
+            ctx.fillText(`▸ ${k + 1}A`, c, fs.cross0 + fs.margin * 0.16);
+            ctx.fillText(`VR 400   ${k + 1}`, c + l * 0.3, fs.cross0 + fs.cross - fs.margin * 0.16);
+          }
+          ctx.restore();
+        }
+        // Sprocket holes, moving with the strip.
+        const hp = fs.pitch / 6;
+        const start = ((((off % hp) + hp) % hp) - hp) - len;
+        const across = fs.margin * 0.36;
+        const alongSize = hp * 0.52;
+        ctx.fillStyle = 'rgba(236,228,212,0.92)';
+        for (let a = start; a < 2 * len; a += hp) {
+          for (const side of [fs.cross0 + fs.margin * 0.56 - across / 2, fs.cross0 + fs.cross - fs.margin * 0.56 - across / 2]) {
+            if (fs.vertical) roundRect(ctx, side, a, across, alongSize, across * 0.22);
+            else roundRect(ctx, a, side, alongSize, across, across * 0.22);
+          }
         }
         ctx.restore();
-      }
-      // Sprocket holes, moving with the strip.
-      const hp = fs.pitch / 6;
-      const off = ((((fs.centre - pos * fs.pitch) % hp) + hp) % hp) - hp;
-      const across = fs.margin * 0.36;
-      const alongSize = hp * 0.52;
-      ctx.fillStyle = 'rgba(236,228,212,0.92)';
-      for (let a = off; a < len + hp; a += hp) {
-        for (const side of [fs.cross0 + fs.margin * 0.56 - across / 2, fs.cross0 + fs.cross - fs.margin * 0.56 - across / 2]) {
-          if (fs.vertical) roundRect(ctx, side, a, across, alongSize, across * 0.22);
-          else roundRect(ctx, a, side, alongSize, across, across * 0.22);
+      };
+      // Motion smear while it slides: a faint copy a little behind.
+      const sliding = su > 0.02 && su < 0.98 && motion;
+      if (sliding) await drawBand(pos - 0.12, 0.35);
+      await drawBand(pos, sliding ? 0.85 : 1);
+      // Warm light leak flaring as each frame lands, plus a faint flicker.
+      if (motion) {
+        const flare = Math.exp(-((sinceLand / 0.14) ** 2)) * 0.5;
+        if (flare > 0.01) {
+          const g = ctx.createRadialGradient(W * 0.9, H * 0.15, 0, W * 0.9, H * 0.15, Math.max(W, H) * 0.6);
+          g.addColorStop(0, `rgba(255,140,60,${flare})`);
+          g.addColorStop(1, 'rgba(255,140,60,0)');
+          ctx.save();
+          ctx.globalCompositeOperation = 'screen';
+          ctx.fillStyle = g;
+          ctx.fillRect(0, 0, W, H);
+          ctx.restore();
         }
+        ctx.fillStyle = `rgba(0,0,0,${0.03 + 0.03 * Math.abs(Math.sin(frame * 1.7))})`;
+        ctx.fillRect(0, 0, W, H);
       }
       grainOver(ctx, grainKit!, frame, 0.22, W, H);
     };
@@ -566,14 +682,21 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
     // -- magazine cover --
     const drawMagazine = async (t: number, i: number) => {
       const m = mag!;
-      const [bg, ink] = MAG_PALETTE[palette[i]];
+      // Colours from the photo itself, eased in over the cut.
+      const target = paletteOf(await shot(i));
+      const since = t - starts[i];
+      const prev = i > 0 ? paletteOf(await shot(i - 1)) : target;
+      const u = motion ? easeOutCubic(since / 0.35) : 1;
+      const bg = mixColor(prev.bg, target.bg, u);
+      const ink = mixColor(prev.ink, target.ink, u);
+      const accent = mixColor(prev.accent, target.accent, u);
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, W, H);
       const title = (style.titles[clips[i].photoId] ?? '').toUpperCase();
       const changed = i === 0 || style.titles[clips[i - 1].photoId] !== style.titles[clips[i].photoId];
-      const since = t - starts[i];
+      const photo = magPhoto(m, style.aspects?.[clips[i].photoId] ?? 0.8);
       ctx.save();
-      ctx.fillStyle = ink;
+      ctx.fillStyle = accent;
       ctx.textBaseline = 'alphabetic';
       ctx.textAlign = 'left';
       spacing(ctx, -m.title.w * 0.004);
@@ -581,19 +704,18 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
       const rise = changed && motion ? (1 - easeOutCubic(since / 0.45)) * px * 0.25 : 0;
       ctx.globalAlpha = changed && motion ? clamp01(since / 0.3) : 1;
       // Vertical: letters sit on the photo's top edge, their feet tucked under it.
-      const base = m.vertical ? m.photo.y + px * 0.1 : m.title.y + px * 0.86;
+      const base = m.vertical ? photo.y + px * 0.1 : m.title.y + px * 0.86;
       ctx.fillText(title, m.title.x, base + rise);
       ctx.restore();
-      // Photo with a soft shadow, over the bottom of the title.
       ctx.save();
       ctx.shadowColor = 'rgba(0,0,0,0.3)';
       ctx.shadowBlur = W * 0.03;
       ctx.shadowOffsetY = W * 0.01;
       ctx.fillStyle = bg;
-      ctx.fillRect(m.photo.x, m.photo.y, m.photo.w, m.photo.h);
+      ctx.fillRect(photo.x, photo.y, photo.w, photo.h);
       ctx.restore();
-      drawInto(ctx, await shot(i), i, progress(i, t), m.photo, motion, punch(i, t));
-      // Issue line.
+      drawInto(ctx, await shot(i), i, progress(i, t), photo, motion, punch(i, t));
+      // Issue line under the photo.
       ctx.save();
       ctx.fillStyle = ink;
       ctx.strokeStyle = ink;
@@ -601,20 +723,21 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
       ctx.lineWidth = Math.max(1, W * 0.0015);
       const fx = m.vertical ? m.photo.x : m.title.x;
       const fw = m.vertical ? m.photo.w : m.title.w;
+      const fy = m.vertical ? photo.y + photo.h + 0.035 * H : m.footerY;
       ctx.beginPath();
-      ctx.moveTo(fx, m.footerY - W * 0.022);
-      ctx.lineTo(fx + fw, m.footerY - W * 0.022);
+      ctx.moveTo(fx, fy - W * 0.022);
+      ctx.lineTo(fx + fw, fy - W * 0.022);
       ctx.stroke();
       const small = Math.round(Math.min(W, H) * 0.026);
       ctx.font = `600 ${small}px ${SANS}`;
       spacing(ctx, small * 0.18);
       ctx.textBaseline = 'middle';
       ctx.textAlign = 'left';
-      ctx.fillText(style.kickers[clips[i].photoId] ?? '', fx, m.footerY);
+      ctx.fillText(style.kickers[clips[i].photoId] ?? '', fx, fy);
       ctx.textAlign = 'right';
       ctx.font = `italic 500 ${Math.round(small * 1.15)}px ${SERIF}`;
       spacing(ctx, 0);
-      ctx.fillText('the travel issue', fx + fw, m.footerY);
+      ctx.fillText('the travel issue', fx + fw, fy);
       ctx.restore();
     };
 
@@ -622,16 +745,17 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
     const drawSplit = async (t: number, i: number) => {
       const page = pageOf.get(i) ?? [i];
       if (page.length === 1) return drawInto(ctx, await shot(i), i, progress(i, t), FULL, motion, punch(i, t));
+      const { variant, entry } = splitVariant(pages.indexOf(page), page.length);
       const step = page.indexOf(i);
-      const now = splitLayout(page.length, step, vertical);
-      const before = step > 0 ? splitLayout(page.length, step - 1, vertical) : now;
-      const u = step > 0 && motion ? easeOutCubic((t - starts[i]) / LOOKS.splitSec) : 1;
+      const now = splitLayout(page.length, step, vertical, variant);
+      const before = step > 0 ? splitLayout(page.length, step - 1, vertical, variant) : now;
+      const u = step > 0 && motion ? easeOutBack((t - starts[i]) / LOOKS.splitSec, 0.6) : 1;
       ctx.fillStyle = '#fff';
       ctx.fillRect(0, 0, W, H);
       const g = Math.min(W, H) * 0.008;
       for (let j = 0; j <= step; j++) {
         const to = now[j];
-        const from = j < step ? before[j] : vertical ? { ...to, y: to.y + 1 } : { ...to, x: to.x + 1 };
+        const from = j < step ? before[j] : entryFrom(to, entry);
         const r = lerpRect(from, to, u);
         // Pixel rect with white gutters between cells (not at the screen edge).
         const x0 = r.x * W + (r.x > 0.001 ? g / 2 : 0);

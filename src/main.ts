@@ -26,7 +26,7 @@ import { NO_WHO, type Who } from './selection';
 import { chooseReel } from './selection/reel';
 import { chapters } from './analysis/chapters';
 import { scorePhotos, type PhotoScore } from './analysis/scoring';
-import { centroid, clusterPeople, findMe, type FaceRef, type Person } from './analysis/friends';
+import { centroid, clusterPeople, findMe, photosWithMe, type FaceRef, type Person } from './analysis/friends';
 import { DEFAULT_SETTINGS, SHAPE_SIZE, type Caption, type Clip, type Photo, type ReelStyle, type ReelSettings, type Shape } from './types';
 import { megabytes, shotTime, shotTimeFull, timecode } from './ui/format';
 
@@ -164,14 +164,26 @@ driveForm.addEventListener('submit', async (ev) => {
   el.drop.classList.add('is-busy');
   try {
     el.importStatus.textContent = 'Opening the Drive link…';
-    const list = await listDrive(driveLink.value);
-    if (!list.length) throw new Error('No photos in that link (videos and documents are skipped).');
-    const { files, failed } = await downloadDrive(list, (done, total) => {
-      el.importStatus.textContent = `Downloading from Drive ${done} of ${total}… (kept in this tab only, not saved to your phone)`;
+    const t0 = performance.now();
+    const all = await listDrive(driveLink.value);
+    if (!all.length) throw new Error('No photos in that link (videos and documents are skipped).');
+    // Adding the same link again fetches only what's missing (e.g. after Google refused some).
+    const have = new Set(photos.map((p) => p.name));
+    const list = all.filter((d) => !have.has(d.name));
+    if (!list.length) throw new Error(`All ${all.length} photos from that link are already added.`);
+    const { files, failed } = await downloadDrive(list, (done, total, waiting) => {
+      const mins = ((performance.now() - t0) / 60000).toFixed(1);
+      el.importStatus.textContent =
+        `Downloading from Drive ${done} of ${total} (${mins} min)… kept in this tab only, not saved to your phone.` +
+        (waiting ? ` Google asked us to slow down; waiting ${waiting}s.` : '');
     });
+    const dlMin = ((performance.now() - t0) / 60000).toFixed(1);
     el.drop.classList.remove('is-busy');
     await addFiles(files, { skipped: failed });
-    driveLink.value = '';
+    el.importStatus.textContent =
+      `${files.length} of ${list.length} photos downloaded from Drive in ${dlMin} min, then ` + el.importStatus.textContent.replace(/^\d+ photos? added/, (m) => m.replace(/^\d+ photos? /, '')) +
+      (failed.length ? ` ${failed.length} couldn't be downloaded: add the same link again to fetch just those.` : '');
+    driveLink.value = failed.length ? driveLink.value : '';
   } catch (err) {
     el.importStatus.textContent = (err as Error).message;
   } finally {
@@ -359,6 +371,14 @@ function updateFriends() {
   for (const person of persons) {
     if (!person.friend && person.id !== meId) continue;
     for (const id of person.photoIds) byPhoto.set(id, [...(byPhoto.get(id) ?? []), person.id]);
+  }
+  // You, face by face (catches photos where clustering didn't group your face with the rest).
+  if (meId) {
+    const meCentre = centroid(persons.find((x) => x.id === meId)!);
+    for (const id of photosWithMe(faces, meCentre)) {
+      const list = byPhoto.get(id) ?? [];
+      if (!list.includes(meId)) byPhoto.set(id, [...list, meId]);
+    }
   }
   who = { friends: (p) => byPhoto.get(p.id) ?? [], known: true, me: meId };
   faceThumbs.forEach((u) => URL.revokeObjectURL(u));
@@ -823,7 +843,8 @@ el.make.addEventListener('click', async () => {
   const captions: Caption[] = el.optCaptions.checked ? buildCaptions(clips, picks, placeOf) : [];
   const labels = photoLabels(clips, picks, placeOf);
   const accents = highlight !== null && audioStart !== null ? [highlight - audioStart] : [];
-  const style: ReelStyle = { motion: el.optMotion.checked, captions, look, accents, ...labels };
+  const aspects = Object.fromEntries(picks.map((p) => [p.id, p.width / p.height]));
+  const style: ReelStyle = { motion: el.optMotion.checked, captions, look, accents, aspects, ...labels };
 
   job = renderReel(clips, picks, settings, style, (done, total, stage) => {
     const pct = total ? (done / total) * 100 : 0;

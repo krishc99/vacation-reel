@@ -27,8 +27,12 @@ export interface Person {
 }
 
 export const FRIEND_DEFAULTS = {
-  /** SFace's published same-person cosine threshold (OpenCV FaceRecognizerSF). */
-  sameCosine: 0.363,
+  /**
+   * Same-person cosine. SFace's published threshold is 0.363 (frontal, studio-like
+   * faces); holiday photos (angles, sunglasses, small faces) split one person into
+   * several groups at that bar, so a little lower. Same-photo faces never merge.
+   */
+  sameCosine: 0.33,
   /**
    * One-off faces at least this big (share of photo height) are the subject of
    * the photo (selfie, portrait, a group shot), so they count as friends.
@@ -112,4 +116,24 @@ export function findMe(people: Person[], me: number[] | null): Person | null {
     }
   }
   return best;
+}
+
+/**
+ * Once you've marked yourself: any single face this close to your fingerprint is
+ * you, even if clustering put it in a group of its own (side-on, small, sunglasses).
+ */
+export const ME_FACE_MATCH = 0.36;
+
+export function photosWithMe(faces: FaceRef[], me: number[] | null): Set<string> {
+  const out = new Set<string>();
+  if (!me) return out;
+  // Best match per photo only: you appear at most once in a photo.
+  const best = new Map<string, number>();
+  for (const f of faces) {
+    if (f.embedding.length !== me.length) continue;
+    const s = f.embedding.reduce((acc, x, i) => acc + x * me[i], 0);
+    if (s > (best.get(f.photoId) ?? -1)) best.set(f.photoId, s);
+  }
+  for (const [id, s] of best) if (s >= ME_FACE_MATCH) out.add(id);
+  return out;
 }

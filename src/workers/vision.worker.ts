@@ -7,6 +7,7 @@ import { l2normalize, similarity, TEMPLATE_112, type Pt } from '../analysis/alig
 import { fetchAsBlobUrl, fetchBytes } from './fetchAsset';
 import { dedupe, headAngles, summarize, type Body, type Box, type Face } from '../analysis/people';
 import { toGray } from '../analysis/pixels';
+import { decodeYunet, yawFromPoints, YUNET, yunetTensor } from '../analysis/yunet';
 import { subjectSharpness } from '../analysis/quality';
 import type { VisionRequest, VisionResponse } from '../types';
 
@@ -15,6 +16,8 @@ declare const self: DedicatedWorkerGlobalScope;
 let face: FaceLandmarker | null = null;
 let pose: PoseLandmarker | null = null;
 let sface: ort.InferenceSession | null = null;
+/** Main face finder when it loads; MediaPipe then only reads expressions on face crops. */
+let yunet: ort.InferenceSession | null = null;
 
 /** Face points used for alignment (MediaPipe mesh indices), in image order left → right. */
 const EYE_L = [33, 133]; // subject's right eye = image left
@@ -26,7 +29,7 @@ const MOUTH_R = 291;
 /** Internal: face plus its 5 alignment points (normalized to the whole photo). */
 type FaceWithPts = Face & { pts: Pt[] };
 
-const EMBED_MIN_FACE = 0.035; // face height share; smaller faces give unreliable identities
+const EMBED_MIN_FACE = 0.025; // face height share (on the 2560 px copy ≈ 48 px); smaller faces give unreliable identities
 const EMBED_MAX_YAW = 50;
 
 function post(msg: VisionResponse) {
@@ -117,6 +120,13 @@ async function init(base: string): Promise<string[]> {
         logSeverityLevel: 3, // the model's graph triggers harmless optimiser warnings
       }),
     );
+    const yunetModel = new URL('models/face_detection_yunet_2023mar.onnx', base).href;
+    try {
+      const bytes = await stage(yunetModel, () => fetchBytes(yunetModel));
+      yunet = await ort.InferenceSession.create(bytes, { executionProviders: ['wasm'], logSeverityLevel: 3 });
+    } catch (err) {
+      warnings.push(`Small-face finder off (${(err as Error).message})`);
+    }
   } catch (err) {
     // The runtime wasm may be the culprit rather than the model.
     const rt = await whyFailed(ortWasm, err);
@@ -169,6 +179,71 @@ function detectFaces(img: ImageBitmap | OffscreenCanvas, tile: Tile): FaceWithPt
   });
 }
 
+/** YuNet on a region of the image (tile, normalized), letterboxed into 640×640. */
+async function detectYunet(src: ImageBitmap, t: Tile): Promise<FaceWithPts[]> {
+  const sw = t.w * src.width;
+  const sh = t.h * src.height;
+  const sc = YUNET.size / Math.max(sw, sh);
+  const c = new OffscreenCanvas(YUNET.size, YUNET.size);
+  const ctx = c.getContext('2d', { willReadFrequently: true })!;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, YUNET.size, YUNET.size);
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(src, t.x * src.width, t.y * src.height, sw, sh, 0, 0, sw * sc, sh * sc);
+  const data = yunetTensor(ctx.getImageData(0, 0, YUNET.size, YUNET.size).data);
+  const out = await yunet!.run({ [yunet!.inputNames[0]]: new ort.Tensor('float32', data, [1, 3, YUNET.size, YUNET.size]) });
+  // Input pixels → normalized whole-photo coordinates.
+  const nx = (x: number) => t.x + (x / sc / sw) * t.w;
+  const ny = (y: number) => t.y + (y / sc / sh) * t.h;
+  return decodeYunet(out as Record<string, { data: ArrayLike<number> }>).map((d) => {
+    const pts = d.pts.map(([x, y]) => [nx(x), ny(y)] as Pt);
+    return {
+      pts,
+      box: { x: nx(d.x), y: ny(d.y), w: (d.w / sc / sw) * t.w, h: (d.h / sc / sh) * t.h },
+      blinkL: 0,
+      blinkR: 0,
+      smile: 0,
+      jawOpen: 0,
+      lookDown: 0,
+      yaw: yawFromPoints(pts),
+      pitch: 0,
+    };
+  });
+}
+
+/**
+ * Expressions (eyes, smile, head angle) for a YuNet face: MediaPipe on a crop
+ * around it, where the face is big enough for MediaPipe's close-range detector.
+ * Keeps YuNet's box and points (they're what SFace aligns on).
+ */
+function readExpression(master: ImageBitmap, f: FaceWithPts): boolean {
+  const side = Math.max(f.box.w * master.width, f.box.h * master.height) * 2.2;
+  const cx = (f.box.x + f.box.w / 2) * master.width;
+  const cy = (f.box.y + f.box.h / 2) * master.height;
+  const c = new OffscreenCanvas(256, 256);
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, 256, 256);
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(master, cx - side / 2, cy - side / 2, side, side, 0, 0, 256, 256);
+  const tile: Tile = { x: 0, y: 0, w: 1, h: 1 };
+  const found = detectFaces(c, tile);
+  // The face nearest the crop's centre is ours.
+  const mine = found.sort((a, b) => Math.hypot(a.box.x + a.box.w / 2 - 0.5, a.box.y + a.box.h / 2 - 0.5) - Math.hypot(b.box.x + b.box.w / 2 - 0.5, b.box.y + b.box.h / 2 - 0.5))[0];
+  if (!mine || Math.hypot(mine.box.x + mine.box.w / 2 - 0.5, mine.box.y + mine.box.h / 2 - 0.5) > 0.2) return false;
+  f.blinkL = mine.blinkL;
+  f.blinkR = mine.blinkR;
+  f.smile = mine.smile;
+  f.jawOpen = mine.jawOpen;
+  f.lookDown = mine.lookDown;
+  f.yaw = mine.yaw;
+  f.pitch = mine.pitch;
+  return true;
+}
+
+/** Pose hand points (wrists, pinkies, index fingers, thumbs). */
+const HAND = [15, 16, 17, 18, 19, 20, 21, 22];
+
 /** Body proportions in real units (x scaled by aspect): [hip width, torso length, leg length] relative to shoulders/torso. */
 function geometry(l: NormalizedLandmark[], aspect: number): number[] {
   const d = (a: number, b: number) => Math.hypot((l[a].x - l[b].x) * aspect, l[a].y - l[b].y);
@@ -181,8 +256,11 @@ function geometry(l: NormalizedLandmark[], aspect: number): number[] {
   return [d(23, 24) / sh, torso / sh, legs / (torso || 1e-6)];
 }
 
+let lastHands: Pt[] = [];
+
 function detectBodies(img: ImageBitmap): Body[] {
   const r = pose!.detect(img);
+  lastHands = r.landmarks.flatMap((lms) => HAND.filter((k) => (lms[k]?.visibility ?? 0) > 0.6).map((k) => [lms[k].x, lms[k].y] as Pt));
   return r.landmarks.flatMap((lms) => {
     const b = boxOf(lms, 0.5);
     if (!b) return [];
@@ -275,7 +353,7 @@ function faceSharpnessOf(master: ImageBitmap, f: Face, noise: number): number {
 async function analyze(req: Extract<VisionRequest, { type: 'photo' }>) {
   const detail = await createImageBitmap(req.detail);
   const whole: Tile = { x: 0, y: 0, w: 1, h: 1 };
-  let faces = detectFaces(detail, whole);
+  let faces = yunet ? await detectYunet(detail, whole) : detectFaces(detail, whole);
   const bodies = pose ? detectBodies(detail) : [];
 
   // Small faces: look again on tiles of the big copy when people are likely
@@ -285,9 +363,11 @@ async function analyze(req: Extract<VisionRequest, { type: 'photo' }>) {
     const master = await createImageBitmap(req.master);
     try {
       if (needTiles) {
-        for (const t of tiles(master.width, master.height)) faces.push(...detectFaces(crop(master, t), t));
+        for (const t of tiles(master.width, master.height)) faces.push(...(yunet ? await detectYunet(master, t) : detectFaces(crop(master, t), t)));
         faces = dedupe(faces);
       }
+      // A big face the expression model can't make out is usually hidden (hands, a cup, hair).
+      if (yunet) for (const f of faces) if (!readExpression(master, f) && f.box.h >= 0.08) f.covered = true;
       for (const f of faces) f.sharpness = faceSharpnessOf(master, f, req.noise);
       // Identity for faces big and frontal enough to recognise.
       for (const f of faces) {
@@ -297,6 +377,14 @@ async function analyze(req: Extract<VisionRequest, { type: 'photo' }>) {
       master.close();
     }
   }
+
+  // A hand inside a face box (shrunk a little, so a hand on the chin doesn't count).
+  for (const f of faces) {
+    const b = f.box;
+    const inside = lastHands.filter(([x, y]) => x > b.x + 0.15 * b.w && x < b.x + 0.85 * b.w && y > b.y + 0.1 * b.h && y < b.y + 0.8 * b.h);
+    if (inside.length >= 2) f.covered = true;
+  }
+  lastHands = [];
 
   let faceSharpness: number | null = null;
   if (faces.length) {

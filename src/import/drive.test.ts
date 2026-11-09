@@ -49,6 +49,7 @@ describe('Google Drive links', () => {
       () => {},
       'k',
       f,
+      { lanes: 2, tries: 3, pauseMs: 5, maxPauseMs: 20 },
     );
     expect(r.files.map((x) => x.name).sort()).toEqual(['flaky.jpg', 'ok.jpg']);
     expect(r.failed.map((x) => x.name)).toEqual(['gone.jpg']);

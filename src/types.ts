@@ -93,6 +93,8 @@ export interface ReelStyle {
   /** Per photo id: magazine cover title (place, or Day N, or month) and issue line ("NO. 02 — JUNE 2026"). */
   titles: Record<string, string>;
   kickers: Record<string, string>;
+  /** Per photo id: width / height, so frames can match each photo's shape. */
+  aspects?: Record<string, number>;
 }
 
 // ---- Worker protocols -------------------------------------------------------

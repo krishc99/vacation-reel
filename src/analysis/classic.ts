@@ -25,6 +25,7 @@ export interface FaceCheck {
   notDown: boolean;
   sharp: boolean;
   inFrame: boolean;
+  uncovered: boolean;
   pass: boolean;
   /** Continuous 0..1 quality used for "best worst face". */
   quality: number;
@@ -39,6 +40,7 @@ export function checkFace(f: Face, o = CLASSIC): FaceCheck {
   const notDown = (f.lookDown ?? 0) <= o.maxLookDown;
   const sharp = (f.sharpness ?? 1) >= o.minFaceSharpness;
   const b = f.box;
+  const uncovered = !f.covered;
   const inFrame = b.x > o.edge && b.y > o.edge && b.x + b.w < 1 - o.edge && b.y + b.h < 1 - o.edge;
   // Eyes weigh most (plan: "heaviest weight"); the rest scale it down.
   const quality =
@@ -46,8 +48,9 @@ export function checkFace(f: Face, o = CLASSIC): FaceCheck {
     clamp01(1 - Math.abs(f.yaw) / 60) *
     clamp01(1 - Math.max(0, (f.lookDown ?? 0) - 0.3)) *
     (0.5 + 0.5 * clamp01(((f.sharpness ?? 0.5) - 0.1) / 0.4)) *
-    (inFrame ? 1 : 0.6);
-  return { eyesOpen, facing, notDown, sharp, inFrame, pass: eyesOpen && facing && notDown && sharp && inFrame, quality };
+    (inFrame ? 1 : 0.6) *
+    (uncovered ? 1 : 0.25);
+  return { eyesOpen, facing, notDown, sharp, inFrame, uncovered, pass: eyesOpen && facing && notDown && sharp && inFrame && uncovered, quality };
 }
 
 export interface FrameRank {
@@ -75,6 +78,7 @@ export function rankFrame(p: People | undefined, expected: number, photoSharpnes
   add(count('notDown'), 'looking down');
   add(count('sharp'), 'soft face');
   add(count('inFrame'), 'cut off');
+  add(count('uncovered'), 'face covered');
   add(missing, 'missing');
   return {
     passing: checks.filter((c) => c.pass).length,

@@ -59,17 +59,17 @@ export function slotScore(p: Photo, quality: number, who: Who = NO_WHO): number 
 
 /**
  * You're usually behind the camera, so you'd barely appear. With "me" chosen,
- * the reel keeps at least max(2, 1 in 4 photos) of you, if the album has them,
+ * the reel keeps at least max(2, 1 in 3 photos) of you, if the album has them,
  * swapping out the weakest picks without you (never a friend's only photo).
  */
 export function ensureMe(all: Photo[], picks: Set<Photo>, score: (p: Photo) => number, who: Who): number {
   const me = who.me;
   if (!me) return 0;
   const mine = (p: Photo) => who.friends(p).includes(me);
-  const target = Math.min(all.filter(mine).length, Math.max(2, Math.ceil(picks.size / 4)));
+  const target = Math.min(all.filter(mine).length, Math.max(2, Math.ceil(picks.size / 3)));
   let swaps = 0;
   while ([...picks].filter(mine).length < target) {
-    const incoming = all.filter((p) => mine(p) && !picks.has(p)).sort((a, b) => score(b) - score(a))[0];
+    const incoming = freshest(all.filter((p) => mine(p) && !picks.has(p)), picks, score);
     const count = new Map<string, number>();
     for (const q of picks) for (const f of who.friends(q)) count.set(f, (count.get(f) ?? 0) + 1);
     const victim = [...picks]
@@ -116,6 +116,66 @@ export function limitSoloOthers(all: Photo[], picks: Set<Photo>, score: (p: Phot
   }
 }
 
+/** Best candidate that doesn't repeat a pick (CLIP ≥ SIMILAR); if all repeat, the best anyway. */
+function freshest(cands: Photo[], picks: Set<Photo>, score: (p: Photo) => number): Photo | undefined {
+  const sorted = [...cands].sort((a, b) => score(b) - score(a));
+  return sorted.find((p) => ![...picks].some((q) => clipSim(p, q) >= SIMILAR)) ?? sorted[0];
+}
+
+/**
+ * Last pass: no two picks of the same setup (CLIP ≥ SIMILAR). Of a near-repeat
+ * pair the sharper one stays (quality first, score breaks near-ties), unless the
+ * other is someone's only photo. The freed slot goes to the best unpicked photo
+ * that repeats nothing, people first.
+ */
+export function dedupeReel(
+  all: Photo[],
+  picks: Set<Photo>,
+  score: (p: Photo) => number,
+  quality: (p: Photo) => number,
+  who: Who,
+): number {
+  let swaps = 0;
+  for (let guard = 0; guard < 2 * picks.size; guard++) {
+    const list = [...picks];
+    let pair: [Photo, Photo] | null = null;
+    let best = SIMILAR;
+    for (let i = 0; i < list.length; i++)
+      for (let j = i + 1; j < list.length; j++) {
+        const s = clipSim(list[i], list[j]);
+        if (s >= best) {
+          best = s;
+          pair = [list[i], list[j]];
+        }
+      }
+    if (!pair) break;
+    const [a, b] = pair;
+    const qa = quality(a);
+    const qb = quality(b);
+    let [keep, drop] = Math.abs(qa - qb) > 0.05 ? (qa > qb ? [a, b] : [b, a]) : score(a) >= score(b) ? [a, b] : [b, a];
+    // Don't lose someone's only photo: then drop the other one.
+    const count = new Map<string, number>();
+    for (const q of picks) for (const f of who.friends(q)) count.set(f, (count.get(f) ?? 0) + 1);
+    const sole = (p: Photo, other: Photo) => who.friends(p).some((f) => (count.get(f) ?? 0) <= 1 && !who.friends(other).includes(f));
+    if (sole(drop, keep)) {
+      if (sole(keep, drop)) {
+        // Both carry someone unique: leave them.
+        break;
+      }
+      [keep, drop] = [drop, keep];
+    }
+    picks.delete(drop);
+    const wantPeople = isPeoplePhoto(drop, who);
+    const rank = (p: Photo) => (isPeoplePhoto(p, who) === wantPeople ? 10 : 0) + score(p);
+    const incoming = all
+      .filter((p) => !picks.has(p) && p !== drop && !isSoloOther(p, who) && ![...picks].some((q) => clipSim(p, q) >= SIMILAR) && clipSim(p, drop) < SIMILAR)
+      .sort((x, y) => rank(y) - rank(x))[0];
+    if (incoming) picks.add(incoming);
+    swaps++;
+  }
+  return swaps;
+}
+
 /** Best-scoring photo from each of `slots` equal runs of consecutive photos (keeps time spread). */
 function spread(photos: Photo[], slots: number, score: (p: Photo) => number): Photo[] {
   if (slots <= 0) return [];
@@ -151,7 +211,7 @@ export function coverFriends(all: Photo[], picks: Set<Photo>, score: (p: Photo) 
   let swaps = 0;
   for (const f of missing) {
     if (count.has(f)) continue; // covered by an earlier swap
-    const incoming = photosOf.get(f)!.filter((p) => !picks.has(p)).sort((a, b) => score(b) - score(a))[0];
+    const incoming = freshest(photosOf.get(f)!.filter((p) => !picks.has(p)), picks, score);
     if (!incoming) continue;
     // Victim: weakest pick that isn't the only photo of any friend.
     const victims = [...picks]
@@ -185,7 +245,7 @@ function fillOthers(others: Photo[], slots: number, score: (p: Photo) => number)
 }
 
 /** CLIP image similarity at or above which two photos count as "the same shot again". */
-export const SIMILAR = 0.9;
+export const SIMILAR = 0.88;
 
 export function clipSim(a: Photo, b: Photo): number {
   const x = a.scene?.embedding;

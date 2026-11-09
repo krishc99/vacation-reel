@@ -107,3 +107,24 @@ describe('limitSoloOthers', () => {
     expect([...picks].map((p) => p.id).sort()).toEqual(['g1', 'm1', 's1']);
   });
 });
+
+describe('dedupeReel', () => {
+  it('keeps the sharper of near-repeat shots and fills the slot with a different scene', async () => {
+    const { dedupeReel } = await import('./index');
+    const v = (k: number) => {
+      const e = new Array(8).fill(0);
+      e[k] = 1;
+      return e;
+    };
+    const mk = (id: string, emb: number[]) => ({ ...photo(id, 0), scene: { label: 'scenery', probs: {}, embedding: emb } }) as unknown as Photo;
+    const blurry = mk('blurry', v(0));
+    const sharp = mk('sharp', v(0));
+    const other = mk('other', v(1));
+    const fresh = mk('fresh', v(2));
+    const q: Record<string, number> = { blurry: 0.2, sharp: 0.9, other: 0.5, fresh: 0.5 };
+    const s: Record<string, number> = { blurry: 0.9, sharp: 0.5, other: 0.6, fresh: 0.4 };
+    const picks = new Set([blurry, sharp, other]);
+    dedupeReel([blurry, sharp, other, fresh], picks, (p) => s[p.id], (p) => q[p.id], { friends: () => [], known: true });
+    expect([...picks].map((p) => p.id).sort()).toEqual(['fresh', 'other', 'sharp']);
+  });
+});

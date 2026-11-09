@@ -35,7 +35,9 @@ export const OVERLAY_CAPTIONS: ReadonlySet<Look> = new Set(['clean', 'film', 'sp
 export const FLASH: ReadonlySet<Look> = new Set(['clean', 'film', 'split', 'magazine']);
 export const SPARKLES: ReadonlySet<Look> = new Set(['clean', 'split', 'magazine']);
 /** How much of a photo (width or height) may be cropped away before it is shown whole over a blur. */
-export const COVER_LOSS: Partial<Record<Look, number>> = { split: 0.6, booth: 0.5 };
+export const COVER_LOSS: Partial<Record<Look, number>> = { split: 0.5, booth: 0.45 };
+/** Same for photos with people: cells this far from the photo's shape show it whole, so nobody gets cut. */
+export const PEOPLE_LOSS: Partial<Record<Look, number>> = { split: 0.35, booth: 0.35, filmstrip: 0.2, magazine: 0.2 };
 
 const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
 
@@ -137,6 +139,31 @@ export function filmStrip(W: number, H: number): FilmStrip {
     pitch: along * 1.06,
     centre: vertical ? 0.47 * H : 0.5 * W,
   };
+}
+
+/** Frame lengths along the strip follow each photo's shape (so nothing is cropped); centres are cumulative. */
+export function stripLayout(fs: FilmStrip, aspects: number[]): { centres: number[]; lengths: number[] } {
+  const inner = fs.vertical ? fs.frame.w : fs.frame.h;
+  const gap = 0.06 * inner;
+  const lengths = aspects.map((a) => {
+    const r = Math.min(1.6, Math.max(0.62, a || 1)); // width / height
+    return fs.vertical ? inner / r : inner * r;
+  });
+  const centres: number[] = [];
+  let at = 0;
+  lengths.forEach((l, k) => {
+    if (k) at += lengths[k - 1] / 2 + gap + l / 2;
+    centres.push(at);
+  });
+  return { centres, lengths };
+}
+
+/** Along-strip coordinate at a fractional position. */
+export function alongAt(centres: number[], pos: number): number {
+  if (!centres.length) return 0;
+  const k = Math.max(0, Math.min(centres.length - 1, Math.floor(pos)));
+  const next = Math.min(centres.length - 1, k + 1);
+  return centres[k] + (pos - k) * (centres[next] - centres[k] || 0);
 }
 
 /**
@@ -243,6 +270,20 @@ export function magazine(W: number, H: number): MagazineLayout {
   return { vertical, margin: m, title, photo, footerY: 0.8 * H };
 }
 
+/** The photo box keeps the photo's own shape (portrait or landscape), within the layout's photo area. */
+export function magPhoto(m: MagazineLayout, aspect: number): Rect {
+  const a = Math.min(1.8, Math.max(0.6, aspect || 0.8));
+  const area = m.photo;
+  let w = area.w;
+  let h = w / a;
+  if (h > area.h) {
+    h = area.h;
+    w = h * a;
+  }
+  // Centred in the photo area (the title sits on its top edge, wherever that is).
+  return { x: area.x + (area.w - w) / 2, y: area.y + (area.h - h) / 2, w, h };
+}
+
 // ---- Split-screen photo dump -----------------------------------------------------------
 
 /**
@@ -276,19 +317,61 @@ export function splitPages(durations: number[], starts: number[], accents: numbe
   return pages;
 }
 
+type R = Rect;
+const r = (x: number, y: number, w: number, h: number): R => ({ x, y, w, h });
 /**
- * Cell rects (normalized 0..1) for a page of `n` photos after `step + 1` of them
- * have appeared: first full screen, then halves, then one half + two quarters.
+ * Arrangements, written for a vertical frame (rows); horizontal frames swap x/y.
+ * Each lists the layout after the 2nd photo and (for 3) after the 3rd.
  */
-export function splitLayout(n: number, step: number, vertical: boolean): Rect[] {
-  const full: Rect = { x: 0, y: 0, w: 1, h: 1 };
-  const a: Rect = vertical ? { x: 0, y: 0, w: 1, h: 0.5 } : { x: 0, y: 0, w: 0.5, h: 1 };
-  const b: Rect = vertical ? { x: 0, y: 0.5, w: 1, h: 0.5 } : { x: 0.5, y: 0, w: 0.5, h: 1 };
-  if (n === 1 || step === 0) return [full];
-  if (step === 1) return [a, b];
-  const b1: Rect = vertical ? { x: 0, y: 0.5, w: 0.5, h: 0.5 } : { x: 0.5, y: 0, w: 0.5, h: 0.5 };
-  const b2: Rect = vertical ? { x: 0.5, y: 0.5, w: 0.5, h: 0.5 } : { x: 0.5, y: 0.5, w: 0.5, h: 0.5 };
-  return [a, b1, b2];
+const SPLIT2: R[][] = [
+  [r(0, 0, 1, 0.5), r(0, 0.5, 1, 0.5)],
+  [r(0, 0.5, 1, 0.5), r(0, 0, 1, 0.5)],
+  [r(0, 0, 1, 0.58), r(0, 0.58, 1, 0.42)],
+  [r(0, 0.42, 1, 0.58), r(0, 0, 1, 0.42)],
+];
+const SPLIT3: R[][][] = [
+  [[r(0, 0, 1, 0.5), r(0, 0.5, 1, 0.5)], [r(0, 0, 1, 0.5), r(0, 0.5, 0.5, 0.5), r(0.5, 0.5, 0.5, 0.5)]],
+  [[r(0, 0, 1, 0.5), r(0, 0.5, 1, 0.5)], [r(0, 0, 0.5, 0.5), r(0, 0.5, 1, 0.5), r(0.5, 0, 0.5, 0.5)]],
+  [[r(0, 0, 1, 0.5), r(0, 0.5, 1, 0.5)], [r(0, 0, 1, 1 / 3), r(0, 2 / 3, 1, 1 / 3), r(0, 1 / 3, 1, 1 / 3)]],
+  [[r(0, 0, 1, 0.6), r(0, 0.6, 1, 0.4)], [r(0, 0, 1, 0.6), r(0, 0.6, 0.5, 0.4), r(0.5, 0.6, 0.5, 0.4)]],
+];
+const swapXY = (q: R): R => ({ x: q.y, y: q.x, w: q.h, h: q.w });
+
+export type Entry = 'bottom' | 'top' | 'left' | 'right' | 'pop';
+const ENTRIES: Entry[] = ['bottom', 'right', 'top', 'left', 'pop'];
+
+/** Each page gets its own arrangement and entry direction (deterministic per page, no two pages in a row alike). */
+export function splitVariant(page: number, n: number): { variant: number; entry: Entry } {
+  const count = n === 3 ? SPLIT3.length : SPLIT2.length;
+  const v = Math.floor(((jitter(page, 21) + 1) / 2) * count) % count;
+  const prev = page > 0 ? Math.floor(((jitter(page - 1, 21) + 1) / 2) * count) % count : -1;
+  return { variant: v === prev ? (v + 1) % count : v, entry: ENTRIES[Math.floor(((jitter(page, 22) + 1) / 2) * ENTRIES.length) % ENTRIES.length] };
+}
+
+/**
+ * Cell rects (normalized 0..1) for a page of `n` photos after `step + 1` of
+ * them have appeared: first full screen, then the variant's arrangement.
+ */
+export function splitLayout(n: number, step: number, vertical: boolean, variant = 0): Rect[] {
+  if (n === 1 || step === 0) return [r(0, 0, 1, 1)];
+  const rows = n === 2 ? SPLIT2[variant % SPLIT2.length] : SPLIT3[variant % SPLIT3.length][Math.min(step, 2) - 1];
+  return vertical ? rows : rows.map(swapXY);
+}
+
+/** Where a new cell starts its entrance from. */
+export function entryFrom(to: Rect, entry: Entry): Rect {
+  switch (entry) {
+    case 'bottom':
+      return { ...to, y: 1 };
+    case 'top':
+      return { ...to, y: -to.h };
+    case 'left':
+      return { ...to, x: -to.w };
+    case 'right':
+      return { ...to, x: 1 };
+    default:
+      return { x: to.x + to.w / 2, y: to.y + to.h / 2, w: 0, h: 0 };
+  }
 }
 
 export const lerpRect = (p: Rect, q: Rect, u: number): Rect => ({

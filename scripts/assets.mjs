@@ -23,6 +23,9 @@ const MODELS = {
     'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
   // Apache-2.0, OpenCV Zoo SFace (MobileFaceNet, LFW 99.40%). Full precision: in
   // the browser's wasm engine it runs ~5× faster than the int8 file (45 vs 240 ms/face).
+  // Face finder for small / angled faces (MIT): https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet
+  'face_detection_yunet_2023mar.onnx':
+    'https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx',
   // https://github.com/opencv/opencv_zoo/tree/main/models/face_recognition_sface
   'face_recognition_sface_2021dec.onnx':
     'https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx',
