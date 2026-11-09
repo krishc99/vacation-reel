@@ -128,3 +128,35 @@ describe('dedupeReel', () => {
     expect([...picks].map((p) => p.id).sort()).toEqual(['fresh', 'other', 'sharp']);
   });
 });
+
+describe('same setup', () => {
+  it('shots a minute apart count as a repeat at a lower image similarity', async () => {
+    const { clipSim, SIMILAR } = await import('./index');
+    const e1 = [1, 0, 0];
+    const e2 = [0.76, 0.65, 0]; // CLIP ≈ 0.76, like the cake photos in Krish's album
+    const mk = (t: number, e: number[]) => ({ ...photo('x', 1), takenAt: t, timeSource: 'exif', scene: { label: 'room', probs: {}, embedding: e } }) as unknown as Photo;
+    expect(clipSim(mk(0, e1), mk(30_000, e2))).toBeGreaterThanOrEqual(SIMILAR);
+    expect(clipSim(mk(0, e1), mk(3_600_000, e2))).toBeLessThan(SIMILAR);
+  });
+});
+
+describe('photos without a camera date', () => {
+  it('open or close the story instead of sitting at their file date', async () => {
+    const { sequence } = await import('./reel');
+    const mk = (id: string, t: number, src: 'exif' | 'file') => ({ ...photo(id, 0), takenAt: t, timeSource: src }) as unknown as Photo;
+    const a = mk('a', 1, 'exif');
+    const b = mk('b', 2, 'exif');
+    const c = mk('c', 3, 'exif');
+    const d = mk('d', 4, 'exif');
+    const u1 = mk('u1', 2.5, 'file');
+    const u2 = mk('u2', 2.6, 'file');
+    const scores = new Map(
+      [a, b, c, d, u1, u2].map((p, i) => [p.id, { Q: 0.5, F: 0.5, C: 0.5, M: i === 3 ? 1 : 0.2, score: p.id === 'u1' ? 0.9 : p.id === 'a' ? 0.95 : 0.4, aesthetic: null, highlight: null }]),
+    );
+    const order = sequence([a, b, c, d, u1, u2], [[a, b, u1, u2, c, d]], scores, { friends: () => [], known: false }).map((p) => p.id);
+    expect(order[0]).toBe('a');
+    expect(order[1]).toBe('u1');
+    expect(order[order.length - 1]).toBe('d');
+    expect(order[order.length - 2]).toBe('u2');
+  });
+});

@@ -269,7 +269,28 @@ function fillOthers(others: Photo[], slots: number, score: (p: Photo) => number)
 /** CLIP image similarity at or above which two photos count as "the same shot again". */
 export const SIMILAR = 0.86;
 
+/**
+ * How much two photos are "the same shot again", 0..1. CLIP similarity, plus
+ * time: from Krish's album, same-setup shots taken a minute apart (the cake
+ * photos at 18:33, the lake shots 10 s apart) scored only 0.74–0.80 on CLIP, below
+ * the repeat bar, so shots close in time get a boost: within 45 s +0.2, within
+ * 3 min +0.12 (camera times only; file dates are unreliable).
+ */
 export function clipSim(a: Photo, b: Photo): number {
+  return Math.min(1, imageSim(a, b) + timeBoost(a, b));
+}
+
+export const TIME_BOOST = { closeSec: 45, close: 0.2, nearSec: 180, near: 0.12 };
+
+function timeBoost(a: Photo, b: Photo): number {
+  if (a.timeSource !== 'exif' || b.timeSource !== 'exif') return 0;
+  const dt = Math.abs(a.takenAt - b.takenAt) / 1000;
+  if (!(dt <= TIME_BOOST.nearSec)) return 0;
+  return dt <= TIME_BOOST.closeSec ? TIME_BOOST.close : TIME_BOOST.near;
+}
+
+/** CLIP image similarity (or, without CLIP, the picture fingerprint). */
+export function imageSim(a: Photo, b: Photo): number {
   const x = a.scene?.embedding;
   const y = b.scene?.embedding;
   if (!x || !y || x.length !== y.length) {

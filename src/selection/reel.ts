@@ -19,7 +19,7 @@ export const REEL = {
   /** Food: at most this share of the reel (min 1) unless nothing else is left. */
   foodShare: 0.1,
   /** Photos without people (scenery, landmarks, city…): at most this share of the reel while people photos are left. */
-  sceneryShare: 0.15,
+  sceneryShare: 0.1,
   beamWidth: 12,
 };
 
@@ -31,12 +31,18 @@ export interface ReelPlan {
 }
 
 /** Slots ∝ chapter importance (sum of its 3 best scores), min 1, largest remainder. */
-function allocate(groups: Photo[][], max: number, score: (p: Photo) => number): number[] {
+function allocate(groups: Photo[][], max: number, score: (p: Photo) => number, people: (p: Photo) => boolean = () => true): number[] {
   const imp = groups.map((g) => g.map(score).sort((a, b) => b - a).slice(0, 3).reduce((s, x) => s + x, 0));
   const slots = groups.map(() => 0);
+  // A guaranteed slot only for chapters that matter: with people in them, or at
+  // least 60% as strong as the median chapter (Krish's album: 3 forwarded
+  // WhatsApp landscapes formed a "chapter" and took a slot from a group photo).
+  const sorted = [...imp].sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)] ?? 0;
+  const worthy = (i: number) => groups[i].some(people) || imp[i] >= 0.6 * median;
   // More chapters than slots: the most important chapters get one each.
-  const order = imp.map((v, i) => [v, i] as const).sort((a, b) => b[0] - a[0]);
-  for (const [, i] of order.slice(0, Math.min(max, groups.length))) slots[i] = 1;
+  const order = imp.map((v, i) => [v, i] as const).filter(([, i]) => worthy(i)).sort((a, b) => b[0] - a[0]);
+  for (const [, i] of order.slice(0, Math.min(max, order.length))) slots[i] = 1;
   let left = max - slots.reduce((s, x) => s + x, 0);
   const total = imp.reduce((s, x, i) => s + (slots[i] ? x : 0), 0) || 1;
   const want = imp.map((v, i) => (slots[i] ? (v / total) * max : 0));
@@ -89,13 +95,15 @@ function pickChapter(
       const p = pool[i];
       const people = isPeoplePhoto(p, who);
       const scenic = ESTABLISHING.has(p.scene?.label ?? '');
-      if (!people && peopleLeft && !(scenic && slots >= 3 && !establishing && scenery.used < scenery.cap)) continue;
+      if (!people && peopleLeft && !(scenic && slots >= 4 && !establishing && scenery.used < scenery.cap)) continue;
       if (isFood(p) && food.used >= food.cap && pool.some((q) => !isFood(q))) continue;
       const sim = simTo(p);
       const fresh = who.friends(p).filter((f) => !shownFriends.has(f)).length;
       // Equal time: people already shown a lot pull a photo down (you're exempt once marked).
       const fs = who.friends(p).filter((f) => f !== who.me);
-      const seen = fs.length ? fs.reduce((acc, f) => acc + (shown.get(f) ?? 0), 0) / fs.length : 0;
+      // The least-shown person in the photo counts, so group shots that bring in
+      // someone rarely seen aren't held back by the others being popular.
+      const seen = fs.length ? Math.min(...fs.map((f) => shown.get(f) ?? 0)) : 0;
       const v =
         score(p) -
         REEL.lambda * Math.max(0, (sim - REEL.simFloor) / (1 - REEL.simFloor)) +
@@ -136,7 +144,7 @@ export function chooseReel(candidates: Photo[], max: number, scores: Map<string,
     }
     return { picks: sequence(candidates, groups, scores, who), droppedForLength: 0, chapters: groups.length, friendSwaps: 0 };
   }
-  const slots = allocate(groups, max, score);
+  const slots = allocate(groups, max, score, (p) => isPeoplePhoto(p, who));
   const food = { used: 0, cap: Math.max(1, Math.floor(max * REEL.foodShare)) };
   const scenery = { used: 0, cap: Math.max(1, Math.floor(max * REEL.sceneryShare)) };
   const chosen: Photo[] = [];
@@ -203,12 +211,24 @@ function orderChapter(items: Photo[], who: Who): Photo[] {
  */
 export function sequence(picks: Photo[], groups: Photo[][], scores: Map<string, PhotoScore>, who: Who): Photo[] {
   const inReel = new Set(picks);
-  let out = groups.flatMap((g) => orderChapter(g.filter((p) => inReel.has(p)), who));
-  if (out.length < 3) return out;
+  // No camera date (forwarded copies, downloads): their file date is meaningless, so
+  // they don't go in the timeline. The strong ones open or close the story instead.
+  const undated = picks.filter((p) => p.timeSource !== 'exif');
+  const dated = new Set(picks.filter((p) => p.timeSource === 'exif'));
+  let out = groups.flatMap((g) => orderChapter(g.filter((p) => inReel.has(p) && dated.has(p)), who));
   const s = (p: Photo) => scores.get(p.id);
-  const hook = [...out].sort((a, b) => (s(b)?.score ?? 0) - (s(a)?.score ?? 0))[0];
-  out = [hook, ...out.filter((p) => p !== hook)];
-  const rest = out.slice(1);
-  const finale = [...rest].sort((a, b) => (s(b)?.M ?? 0) - (s(a)?.M ?? 0))[0];
-  return [hook, ...rest.filter((p) => p !== finale), finale];
+  if (out.length >= 3) {
+    const hook = [...out].sort((a, b) => (s(b)?.score ?? 0) - (s(a)?.score ?? 0))[0];
+    out = [hook, ...out.filter((p) => p !== hook)];
+    const rest = out.slice(1);
+    const finale = [...rest].sort((a, b) => (s(b)?.M ?? 0) - (s(a)?.M ?? 0))[0];
+    out = [hook, ...rest.filter((p) => p !== finale), finale];
+  }
+  if (!undated.length) return out;
+  // Best undated first: alternate them between just after the opener and just before the finale.
+  const ranked = [...undated].sort((a, b) => (s(b)?.score ?? 0) - (s(a)?.score ?? 0));
+  const front = ranked.filter((_, i) => i % 2 === 0);
+  const back = ranked.filter((_, i) => i % 2 === 1);
+  if (out.length < 2) return [...front, ...out, ...back];
+  return [out[0], ...front, ...out.slice(1, -1), ...back, out[out.length - 1]];
 }

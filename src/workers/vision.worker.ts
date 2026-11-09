@@ -372,8 +372,9 @@ async function analyze(req: Extract<VisionRequest, { type: 'photo' }>) {
         for (const t of tiles(master.width, master.height)) faces.push(...(yunet ? await detectYunet(master, t) : detectFaces(crop(master, t), t)));
         faces = dedupe(faces);
       }
-      // A big face the expression model can't make out is usually hidden (hands, a cup, hair).
-      if (yunet) for (const f of faces) if (!readExpression(master, f) && f.box.h >= 0.08) f.covered = true;
+      // A front-facing face the expression model can't make out is usually hidden
+      // (hands, a cup, hair). Turned faces fail for other reasons, so they don't count.
+      if (yunet) for (const f of faces) if (!readExpression(master, f) && f.box.h >= 0.05 && Math.abs(f.yaw) < 30) f.covered = true;
       for (const f of faces) f.sharpness = faceSharpnessOf(master, f, req.noise);
       // Identity for faces big and frontal enough to recognise.
       for (const f of faces) {

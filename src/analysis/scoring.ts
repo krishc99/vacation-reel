@@ -23,6 +23,8 @@ export const ME_BOOST = 0.2;
 export const SOLO_OTHER_PENALTY = 0.3;
 /** At least half the faces covered (hands over face). */
 export const COVERED_PENALTY = 0.25;
+/** Photo without a camera date. */
+export const NO_DATE_PENALTY = 0.1;
 
 export interface PhotoScore {
   Q: number;
@@ -138,6 +140,9 @@ export function scorePhotos(photos: Photo[], ctx: ScoreContext, w = SCORE_WEIGHT
     const faces = p.people?.faces ?? [];
     const hidden = faces.filter((f) => f.covered).length;
     if (faces.length && hidden * 2 >= faces.length) adj -= COVERED_PENALTY;
+    // No camera date (forwarded/WhatsApp copies, screenshots of photos): can't be
+    // placed in the story, often a lower-quality copy of something else.
+    if (p.timeSource !== 'exif') adj -= NO_DATE_PENALTY;
     out.set(p.id, {
       Q: pQ[i],
       F: pF[i],

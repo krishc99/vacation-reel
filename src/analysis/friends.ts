@@ -107,6 +107,9 @@ export function clusterPeople(faces: FaceRef[], o = FRIEND_DEFAULTS): Person[] {
     clusters[bj].photos.forEach((p) => clusters[bi].photos.add(p));
     clusters.splice(bj, 1);
   }
+  // Recurring = seen in at least 2 moments; in big albums (100+ moments) 3, so a
+  // stranger caught twice in the background doesn't become a "friend".
+  const minMoments = new Set(faces.map((f) => f.burstId)).size >= 100 ? 3 : 2;
   const people = clusters.map((c, k) => {
     const fs = c.members.map((i) => faces[i]);
     const moments = new Set(fs.map((f) => f.burstId)).size;
@@ -117,7 +120,7 @@ export function clusterPeople(faces: FaceRef[], o = FRIEND_DEFAULTS): Person[] {
       photoIds: [...c.photos],
       moments,
       largest,
-      friend: moments >= 2 || largest >= o.bigFace,
+      friend: moments >= minMoments || largest >= o.bigFace,
     };
   });
   // Most-seen first; stable ids by rank so the UI order is meaningful.

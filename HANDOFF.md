@@ -214,6 +214,15 @@ ios           picker wait message: after the picker closes (focus/visibility), "
 ```
 Still waiting on Krish's debug report from a real album to tune SIMILAR / scoring with data.
 
+## 7m. From Krish's debug report (317 photos, 279 keepers, 487 faces/361 ided, 7 main people 31–66 photos each — recognition now fine)
+```
+findings      Reel had: same-setup pairs at CLIP .74 (cake, same minute) / .80 (lake, 10 s apart) — under SIMILAR .86; a forwarded-WhatsApp landscape (file date) forming its own chapter and taking a guaranteed slot; group shots (#33: 6 friends, score .80) lost to smaller groups because "equal time" averaged everyone's earlier appearances (groups of popular people penalised) and split one-off "friends" (2 moments, tiny faces) earned the new-friend bonus
+fixes         clipSim = imageSim + time boost (camera dates only): ≤ 45 s +.2, ≤ 3 min +.12 (TIME_BOOST) — used everywhere repeats are judged. Balance uses the LEAST-shown person in the photo. Friend needs ≥ 3 moments when album has ≥ 100 moments. allocate: guaranteed slot only for chapters with a people photo or importance ≥ .6 × median. NO_DATE_PENALTY .1 (timeSource 'file'). sceneryShare .1; establishing shot only in chapters with ≥ 4 slots
+undated       sequence(): photos without a camera date leave the timeline; best-scored alternate between right after the opener and right before the finale. Repeats for them = image similarity only (no time boost). Covered: also front-facing (|yaw| < 30) faces ≥ 5% tall that MediaPipe can't mesh (was ≥ 8%)
+check         Krish's carousel set (#7,#12–16, CLIP .84–.95, within 70 s) and pirate set (#42–44, .88–.91, within 10 s) → each becomes one photo with the time boost
+tools         scratchpad/rep/lib.py: load(report) → (data, thumbs by "#n"); sheet(thumbs, [(n, label)], path) contact sheet
+```
+
 ## 7f. Milestone 6 scope — fun modes (plan)
 Funny (jawOpen/mouthPucker/cheekPuff/eyeWide*/browInnerUp high; wink OK, half-closed both = blink), Laugh (eyes closed + big smile + open jaw), Scenic from behind (shoulders, no nose/eyes; judge scenery sharpness + framing, people small), Jump/arms up (wrists above head; highest body frame in burst). Intentional vs accidental: shared or held deviations intentional; one person in one frame accidental. A burst can yield several keepers (one per mode). Mix ~1 fun per 4–5 classic, spread out (M7 sequencing).
 
