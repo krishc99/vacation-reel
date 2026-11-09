@@ -143,3 +143,37 @@ export function buildCaptions(clips: Clip[], photos: Photo[], placeOf: (p: Photo
   for (let k = 0; k + 1 < out.length; k++) out[k].end = Math.min(out[k].end, out[k + 1].start - 0.05);
   return out.filter((c) => c.end - c.start >= 0.8);
 }
+
+export interface PhotoLabels {
+  /** Film date stamp: 6 01 '26. */
+  stamps: Record<string, string>;
+  /** Booth strip label: "Sintra · 3 June". */
+  notes: Record<string, string>;
+  /** Magazine cover title: place, else "Day 2", else the month. */
+  titles: Record<string, string>;
+  /** Magazine issue line: "NO. 02 — JUNE 2026". */
+  kickers: Record<string, string>;
+}
+
+/** Per-photo text for the looks that show place and date their own way. */
+export function photoLabels(clips: Clip[], photos: Photo[], placeOf: (p: Photo) => string | null): PhotoLabels {
+  const out: PhotoLabels = { stamps: {}, notes: {}, titles: {}, kickers: {} };
+  const byId = new Map(photos.map((p) => [p.id, p]));
+  const shot = clips.map((c) => byId.get(c.photoId)!);
+  const dated = shot.filter((p) => p.timeSource === 'exif');
+  const first = dated.length ? Math.min(...dated.map((p) => dayStart(p.takenAt))) : null;
+  const multiDay = new Set(dated.map((p) => dayStart(p.takenAt))).size > 1;
+  for (const p of shot) {
+    const isDated = p.timeSource === 'exif';
+    const day = first !== null && isDated ? Math.round((dayStart(p.takenAt) - first) / 86_400_000) + 1 : null;
+    const place = placeOf(p);
+    const when = isDated ? new Date(p.takenAt) : null;
+    if (when) out.stamps[p.id] = `${when.getMonth() + 1} ${String(when.getDate()).padStart(2, '0')} '${String(when.getFullYear()).slice(2)}`;
+    const date = when ? when.toLocaleDateString('en-GB', { day: 'numeric', month: 'long' }) : '';
+    out.notes[p.id] = [place, date].filter(Boolean).join(' · ');
+    out.titles[p.id] = place ?? (multiDay && day ? `Day ${day}` : when ? when.toLocaleDateString('en-US', { month: 'long' }) : 'Travels');
+    const issue = `NO. ${String(day ?? 1).padStart(2, '0')}`;
+    out.kickers[p.id] = when ? `${issue} — ${monthYear(when.getTime()).toUpperCase()}` : issue;
+  }
+  return out;
+}

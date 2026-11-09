@@ -53,6 +53,8 @@ export function frameFor(
   subjects: Subject[] = [],
   /** No people: where the detail is (normalized centre), from salientCentre. */
   salient: { x: number; y: number } | null = null,
+  /** Small cells (split screen, booth) can crop harder than the full frame. */
+  maxCoverLoss = FRAMING.maxCoverLoss,
 ): Framing {
   const cover = centerCoverCrop(srcW, srcH, dstW, dstH);
   const loss = 1 - Math.min(cover.sw / srcW, cover.sh / srcH);
@@ -73,7 +75,7 @@ export function frameFor(
     return fit(srcW, srcH, dstW, dstH, { x0, y0, x1, y1 });
   }
 
-  if (loss <= FRAMING.maxCoverLoss) {
+  if (loss <= maxCoverLoss) {
     if (!salient) return { mode: 'cover', crop: cover };
     const sx = Math.min(srcW - cover.sw, Math.max(0, salient.x * srcW - cover.sw / 2));
     const sy = Math.min(srcH - cover.sh, Math.max(0, salient.y * srcH - cover.sh / 2));

@@ -87,9 +87,12 @@ export interface ReelStyle {
   look: import('./render/looks').Look;
   /** Reel times of the big musical moment (chorus hit): flash + sparkles. */
   accents: number[];
-  /** Per photo id: film date stamp ("6 01 '26") and scrapbook note ("3 June" / caption). */
+  /** Per photo id: film date stamp ("6 01 '26"); booth strip label ("Day 2 · Sintra" / "3 June"). */
   stamps: Record<string, string>;
   notes: Record<string, string>;
+  /** Per photo id: magazine cover title (place, or Day N, or month) and issue line ("NO. 02 — JUNE 2026"). */
+  titles: Record<string, string>;
+  kickers: Record<string, string>;
 }
 
 // ---- Worker protocols -------------------------------------------------------

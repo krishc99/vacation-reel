@@ -14,7 +14,8 @@ Photos never leave the device: no backend, no paid APIs.
 - M7: one score per photo (quality, faces, looks, moment), chapters by time and place, variety, story order. Mark yourself to get more photos with you.
 - M8: slow zoom toward the people, hard cuts on bar starts and short crossfades in between, crop toward the detail in photos without people, optional captions ("Day 2 · Lisbon") from GPS using an offline place list.
 
-- Looks: Clean · Film (warm grade, light leaks, grain, disposable-camera date stamp) · Scrapbook (polaroids drop onto paper on the beat, washi tape, handwritten notes). Zoom punch on each bar, flash + sparkles on the chorus hit.
+- Looks: Clean · Film (warm grade, light leaks, grain, disposable-camera date stamp) · Film strip (35 mm strip slides a frame per beat) · Photo booth (strips of 3, a flash per photo) · Magazine (big serif place name, editorial cover) · Split screen (photo dump: 2–3 photos at once on quick beats). Zoom punch on each bar, flash + sparkles on the chorus hit.
+- Google Drive: paste a folder link shared as "Anyone with the link". Needs a free Google API key saved as the GitHub secret `GOOGLE_API_KEY` (Drive API only, restricted to the site's address).
 
 - Shape: vertical 1080×1920 (Reels) or horizontal 1920×1080.
 - Photos without EXIF dates fall back to the file's modified date.

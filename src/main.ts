@@ -17,8 +17,9 @@ import { sortByTime } from './import/sort';
 import { excerpt, loadSong, type Song } from './audio/song';
 import { maxPhotosForMusic, planMusicTimeline, songParts, type SongStart } from './render/musicTimeline';
 import { renderReel, type RenderJob } from './render/renderer';
-import { buildCaptions, loadPlaces, nearestPlace } from './render/captions';
-import { noteText, stampText, type Look } from './render/looks';
+import { DRIVE_KEY, downloadDrive, listDrive } from './import/drive';
+import { buildCaptions, loadPlaces, nearestPlace, photoLabels } from './render/captions';
+import type { Look } from './render/looks';
 import { frameFor } from './render/crop';
 import { buildTimeline, timelineDuration } from './render/timeline';
 import { NO_WHO, type Who } from './selection';
@@ -103,9 +104,12 @@ if (typeof VideoEncoder === 'undefined' || typeof OffscreenCanvas === 'undefined
 
 // ---- Import ------------------------------------------------------------------
 
-async function addFiles(list: FileList | File[]) {
+async function addFiles(list: FileList | File[], fromDrive: { skipped: { name: string; reason: string }[] } | null = null) {
   const files = [...list].filter((f) => f.type.startsWith('image/') || /\.(heic|heif)$/i.test(f.name));
-  if (!files.length) return;
+  if (!files.length) {
+    if (fromDrive) showSkipped(fromDrive.skipped);
+    return;
+  }
   el.drop.classList.add('is-busy');
   el.importStatus.textContent = `Reading 0 of ${files.length}…`;
   const t0 = performance.now();
@@ -118,7 +122,9 @@ async function addFiles(list: FileList | File[]) {
       (done, total) => {
         el.importStatus.textContent = `Copying ${done} of ${total}…`;
       },
+      !fromDrive,
     );
+    if (fromDrive) skipped.unshift(...fromDrive.skipped);
     photos = sortByTime([...photos, ...added]);
     analysis = analyzeAlbum(photos);
     // Burst ids are positional, so keeper picks don't survive a re-analysis.
@@ -146,6 +152,33 @@ async function addFiles(list: FileList | File[]) {
     el.drop.classList.remove('is-busy');
   }
 }
+
+// Google Drive: paste a folder link shared as "Anyone with the link".
+const driveForm = document.getElementById('drive-form') as HTMLFormElement;
+const driveLink = document.getElementById('drive-link') as HTMLInputElement;
+driveForm.hidden = !DRIVE_KEY;
+driveForm.addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const button = driveForm.querySelector('button')!;
+  button.disabled = true;
+  el.drop.classList.add('is-busy');
+  try {
+    el.importStatus.textContent = 'Opening the Drive link…';
+    const list = await listDrive(driveLink.value);
+    if (!list.length) throw new Error('No photos in that link (videos and documents are skipped).');
+    const { files, failed } = await downloadDrive(list, (done, total) => {
+      el.importStatus.textContent = `Downloading from Drive ${done} of ${total}… (kept in this tab only, not saved to your phone)`;
+    });
+    el.drop.classList.remove('is-busy');
+    await addFiles(files, { skipped: failed });
+    driveLink.value = '';
+  } catch (err) {
+    el.importStatus.textContent = (err as Error).message;
+  } finally {
+    button.disabled = false;
+    el.drop.classList.remove('is-busy');
+  }
+});
 
 function showSkipped(skipped: { name: string; reason: string }[]) {
   el.skipped.replaceChildren(
@@ -772,35 +805,25 @@ el.make.addEventListener('click', async () => {
   el.progressLabel.textContent = 'Starting…';
   const t0 = performance.now();
 
-  let captions: Caption[] = [];
-  let captionNote = '';
-  if (el.optCaptions.checked) {
-    el.progressLabel.textContent = 'Looking up places…';
-    const gps = picks.some((p) => p.lat !== null && p.lon !== null);
-    let places: Awaited<ReturnType<typeof loadPlaces>> | null = null;
-    if (gps) {
-      try {
-        places = await loadPlaces();
-      } catch (err) {
-        captionNote = ` Place names unavailable (${(err as Error).message}); captions show days only.`;
-      }
-    } else captionNote = ' No location in these photos, so captions show days only.';
-    captions = buildCaptions(clips, picks, (p) => (places && p.lat !== null && p.lon !== null ? nearestPlace(places, p.lat, p.lon) : null));
-  }
   const look = (document.querySelector<HTMLInputElement>('input[name="look"]:checked')?.value ?? 'clean') as Look;
-  const stamps: Record<string, string> = {};
-  const notes: Record<string, string> = {};
-  for (const c of clips) {
-    const p = picks.find((x) => x.id === c.photoId)!;
-    const dated = p.timeSource === 'exif';
-    if (dated) stamps[p.id] = stampText(p.takenAt);
-    // Scrapbook note: the caption that starts on this photo, else its date.
-    const cap = captions.find((k) => k.start >= c.start && k.start < c.start + c.duration);
-    if (cap) notes[p.id] = cap.top ? `${cap.top} · ${cap.main}` : cap.main;
-    else if (dated) notes[p.id] = noteText(p.takenAt);
-  }
+  // Place names: for captions, and for the looks that print the place (magazine title, booth label).
+  let captionNote = '';
+  let places: Awaited<ReturnType<typeof loadPlaces>> | null = null;
+  const wantPlaces = el.optCaptions.checked || look === 'magazine' || look === 'booth';
+  const gps = picks.some((p) => p.lat !== null && p.lon !== null);
+  if (wantPlaces && gps) {
+    el.progressLabel.textContent = 'Looking up places…';
+    try {
+      places = await loadPlaces();
+    } catch (err) {
+      captionNote = ` Place names unavailable (${(err as Error).message}); showing days only.`;
+    }
+  } else if (wantPlaces) captionNote = ' No location in these photos, so only days are shown.';
+  const placeOf = (p: Photo) => (places && p.lat !== null && p.lon !== null ? nearestPlace(places, p.lat, p.lon) : null);
+  const captions: Caption[] = el.optCaptions.checked ? buildCaptions(clips, picks, placeOf) : [];
+  const labels = photoLabels(clips, picks, placeOf);
   const accents = highlight !== null && audioStart !== null ? [highlight - audioStart] : [];
-  const style: ReelStyle = { motion: el.optMotion.checked, captions, look, accents, stamps, notes };
+  const style: ReelStyle = { motion: el.optMotion.checked, captions, look, accents, ...labels };
 
   job = renderReel(clips, picks, settings, style, (done, total, stage) => {
     const pct = total ? (done / total) * 100 : 0;

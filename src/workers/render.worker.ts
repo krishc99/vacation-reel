@@ -1,34 +1,74 @@
 /// <reference lib="webworker" />
 import { centerCoverCrop, frameFor, type CropRect, type Framing, type Subject } from '../render/crop';
 import { createEncoder, type FrameEncoder } from '../render/encoder';
+import {
+  booth,
+  boothGroups,
+  easeOutBack,
+  easeOutCubic,
+  filmStrip,
+  COVER_LOSS,
+  FLASH,
+  flashAt,
+  leakAt,
+  lerpRect,
+  LOOKS,
+  MAG_PALETTE,
+  magazine,
+  OVERLAY_CAPTIONS,
+  punchAt,
+  sparkles,
+  SPARKLES,
+  splitLayout,
+  splitPages,
+  stripPosition,
+  type Rect,
+} from '../render/looks';
 import { MOTION, safeZoom, salientCentre, zoomAt, zoomed, zoomFor, type Box } from '../render/motion';
 import { timelineDuration } from '../render/timeline';
-import { dropPose, flashAt, leakAt, LOOKS, polaroid, punchAt, restingPose, sparkles, jitter, type Polaroid, type Pose } from '../render/looks';
-import type { Caption, Clip, RenderRequest, RenderResponse } from '../types';
+import type { Caption, RenderRequest, RenderResponse } from '../types';
 
 declare const self: DedicatedWorkerGlobalScope;
+type Ctx = OffscreenCanvasRenderingContext2D;
 
 function post(msg: RenderResponse, transfer: Transferable[] = []) {
   self.postMessage(msg, transfer);
 }
 
-/** Cheap, portable blur (canvas `filter` isn't in every browser): shrink 24×, then scale back up smoothly. */
-function blurredCover(full: ImageBitmap, w: number, h: number): OffscreenCanvas {
-  const c = centerCoverCrop(full.width, full.height, w, h);
-  const tw = Math.max(1, Math.round(w / 24));
-  const th = Math.max(1, Math.round(h / 24));
-  const tiny = new OffscreenCanvas(tw, th);
-  const tctx = tiny.getContext('2d')!;
-  tctx.imageSmoothingQuality = 'high';
-  tctx.drawImage(full, c.sx, c.sy, c.sw, c.sh, 0, 0, tw, th);
-  return tiny;
+const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
+
+// ---- One photo, drawable into any rectangle -------------------------------------------
+
+interface View {
+  framing: Framing;
+  ax: number;
+  ay: number;
+  z: number;
 }
 
-/** Where the detail is in a photo without people (normalized centre), from edge energy on a small copy. */
-function salientPoint(full: ImageBitmap, f: Framing & { mode: 'cover' }): { x: number; y: number } | null {
-  const shareX = f.crop.sw / full.width;
-  const shareY = f.crop.sh / full.height;
-  if (shareX > 0.97 && shareY > 0.97) return null;
+/** Everything needed to draw one clip at any size and moment. */
+interface Shot {
+  full: ImageBitmap;
+  subjects: Subject[];
+  keep: Box | null;
+  /** Whole photo at ~48 px: scaled up, it is the blurred fill. */
+  tiny: OffscreenCanvas;
+  /** Edge energy per column / row (on a 96 px copy) for the no-people crop. */
+  cols: Float32Array;
+  rows: Float32Array;
+  /** Seconds on screen: sets how far it zooms. */
+  seconds: number;
+  views: Map<string, View>;
+}
+
+async function prepare(image: Blob, subjects: Subject[], seconds: number): Promise<Shot> {
+  const full = await createImageBitmap(image);
+  const long = Math.max(full.width, full.height);
+  const tiny = new OffscreenCanvas(Math.max(1, Math.round((48 * full.width) / long)), Math.max(1, Math.round((48 * full.height) / long)));
+  const tctx = tiny.getContext('2d')!;
+  tctx.imageSmoothingQuality = 'high';
+  tctx.drawImage(full, 0, 0, tiny.width, tiny.height);
+
   const W = 96;
   const H = Math.max(8, Math.round((W * full.height) / full.width));
   const c = new OffscreenCanvas(W, H);
@@ -45,63 +85,75 @@ function salientPoint(full: ImageBitmap, f: Framing & { mode: 'cover' }): { x: n
       cols[x] += e;
       rows[y] += e;
     }
-  return { x: shareX < 0.97 ? salientCentre(cols, shareX) : 0.5, y: shareY < 0.97 ? salientCentre(rows, shareY) : 0.5 };
+
+  const keep: Box | null = subjects.length
+    ? {
+        x0: Math.min(...subjects.map((b) => b.x)) * full.width,
+        y0: Math.min(...subjects.map((b) => b.y)) * full.height,
+        x1: Math.max(...subjects.map((b) => b.x + b.w)) * full.width,
+        y1: Math.max(...subjects.map((b) => b.y + b.h)) * full.height,
+      }
+    : null;
+  return { full, subjects, keep, tiny, cols, rows, seconds, views: new Map() };
 }
 
-/** Everything needed to draw one clip at any moment. */
-interface Shot {
-  full: ImageBitmap;
-  framing: Framing;
-  /** Fit mode: blurred fill behind the photo. */
-  fill: OffscreenCanvas | null;
-  ax: number;
-  ay: number;
-  /** Zoom reached at the end of the motion (1 = still). */
-  z: number;
-}
+/** Framing + zoom anchor for a w×h window (cached per size). */
+let coverLoss: number | undefined;
 
-async function prepare(clip: Clip, image: Blob, subjects: Subject[], w: number, h: number, motion: boolean): Promise<Shot> {
-  const full = await createImageBitmap(image);
-  let framing = frameFor(full.width, full.height, w, h, subjects);
-  if (!subjects.length && framing.mode === 'cover') framing = frameFor(full.width, full.height, w, h, [], salientPoint(full, framing));
-  const win = framing.crop;
-  let keep: Box | null = null;
-  if (subjects.length) {
-    keep = {
-      x0: Math.min(...subjects.map((b) => b.x)) * full.width,
-      y0: Math.min(...subjects.map((b) => b.y)) * full.height,
-      x1: Math.max(...subjects.map((b) => b.x + b.w)) * full.width,
-      y1: Math.max(...subjects.map((b) => b.y + b.h)) * full.height,
-    };
+function viewOf(s: Shot, w: number, h: number, motion: boolean): View {
+  const key = `${Math.round(w)}x${Math.round(h)}`;
+  const hit = s.views.get(key);
+  if (hit) return hit;
+  const fw = s.full.width;
+  const fh = s.full.height;
+  let framing = frameFor(fw, fh, w, h, s.subjects, null, coverLoss);
+  if (!s.subjects.length && framing.mode === 'cover') {
+    const sx = framing.crop.sw / fw;
+    const sy = framing.crop.sh / fh;
+    if (sx < 0.97 || sy < 0.97)
+      framing = frameFor(fw, fh, w, h, [], { x: sx < 0.97 ? salientCentre(s.cols, sx) : 0.5, y: sy < 0.97 ? salientCentre(s.rows, sy) : 0.5 }, coverLoss);
   }
-  // Anchor: the people's centre (or the window's), kept inside the window.
+  const win = framing.crop;
+  const k = s.keep;
   const clampTo = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
-  const ax = clampTo(keep ? (keep.x0 + keep.x1) / 2 : win.sx + win.sw / 2, win.sx, win.sx + win.sw);
-  const ay = clampTo(keep ? (keep.y0 + keep.y1) / 2 : win.sy + win.sh / 2, win.sy, win.sy + win.sh);
-  const onScreen = clip.duration + MOTION.fade + LOOKS.dropSec / 2;
-  const z = motion ? safeZoom(win, ax, ay, keep, zoomFor(onScreen)) : 1;
-  return { full, framing, fill: framing.mode === 'fit' ? blurredCover(full, w, h) : null, ax, ay, z };
+  const ax = clampTo(k ? (k.x0 + k.x1) / 2 : win.sx + win.sw / 2, win.sx, win.sx + win.sw);
+  const ay = clampTo(k ? (k.y0 + k.y1) / 2 : win.sy + win.sh / 2, win.sy, win.sy + win.sh);
+  const v = { framing, ax, ay, z: motion ? safeZoom(win, ax, ay, k, zoomFor(s.seconds)) : 1 };
+  if (s.views.size > 12) s.views.clear(); // animated rects: don't pile up
+  s.views.set(key, v);
+  return v;
 }
 
-/** Draws a shot into the rect (x, y, w, h); `extra` multiplies the zoom (beat punch). */
-function drawShot(ctx: OffscreenCanvasRenderingContext2D, s: Shot, index: number, u: number, w: number, h: number, extra = 1, x = 0, y = 0) {
+/** Draws photo `index` into rect r at motion progress u; `extra` multiplies the zoom (beat punch). */
+function drawInto(ctx: Ctx, s: Shot, index: number, u: number, r: Rect, motion: boolean, extra = 1) {
+  if (r.w < 2 || r.h < 2) return;
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
-  const f = s.framing;
-  const z = (s.z > 1.0005 ? zoomAt(index, s.z, u) : 1) * extra;
-  const src: CropRect = z > 1.0005 ? zoomed(f.crop, s.ax, s.ay, z) : f.crop;
+  const v = viewOf(s, r.w, r.h, motion);
+  const f = v.framing;
+  const z = (v.z > 1.0005 ? zoomAt(index, v.z, clamp01(u)) : 1) * extra;
+  const src: CropRect = z > 1.0005 ? zoomed(f.crop, v.ax, v.ay, z) : f.crop;
   if (f.mode === 'cover') {
-    ctx.drawImage(s.full, src.sx, src.sy, src.sw, src.sh, x, y, w, h);
+    ctx.drawImage(s.full, src.sx, src.sy, src.sw, src.sh, r.x, r.y, r.w, r.h);
     return;
   }
-  ctx.drawImage(s.fill!, x, y, w, h);
-  ctx.fillStyle = 'rgba(0,0,0,0.28)';
-  ctx.fillRect(x, y, w, h);
+  drawBlur(ctx, s, r, 0.28);
   const d = f.dest;
-  ctx.drawImage(s.full, src.sx, src.sy, src.sw, src.sh, x + d.x, y + d.y, d.w, d.h);
+  ctx.drawImage(s.full, src.sx, src.sy, src.sw, src.sh, r.x + d.x, r.y + d.y, d.w, d.h);
 }
 
-// ---- Film look: warm faded grade, light leaks, grain, vignette, date stamp ----------
+/** Blurred, darkened copy of the photo filling r. */
+function drawBlur(ctx: Ctx, s: Shot, r: Rect, dark: number) {
+  const c = centerCoverCrop(s.tiny.width, s.tiny.height, r.w, r.h);
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(s.tiny, c.sx, c.sy, c.sw, c.sh, r.x, r.y, r.w, r.h);
+  if (dark > 0) {
+    ctx.fillStyle = `rgba(0,0,0,${dark})`;
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+  }
+}
+
+// ---- Film: warm faded grade, light leaks, grain, vignette, date stamp -----------------
 
 function makeGrain(w: number, h: number, seed: number): OffscreenCanvas {
   const gw = Math.ceil(w / 2);
@@ -182,77 +234,8 @@ function drawFilm(ctx: OffscreenCanvasRenderingContext2D, kit: FilmKit, t: numbe
   ctx.restore();
 }
 
-// ---- Scrapbook look: polaroids dropping onto paper, washi tape, handwritten notes -----
 
-function makePaper(w: number, h: number): OffscreenCanvas {
-  const c = new OffscreenCanvas(w, h);
-  const g = c.getContext('2d')!;
-  g.fillStyle = '#efe6d8';
-  g.fillRect(0, 0, w, h);
-  // Paper fibres.
-  for (let i = 0; i < 2600; i++) {
-    const x = ((jitter(i, 11) + 1) / 2) * w;
-    const y = ((jitter(i, 12) + 1) / 2) * h;
-    g.fillStyle = `rgba(${jitter(i, 13) > 0 ? '120,100,80' : '255,255,255'},${0.05 + 0.06 * Math.abs(jitter(i, 14))})`;
-    g.fillRect(x, y, 1 + 2 * Math.abs(jitter(i, 15)), 1);
-  }
-  // Journal dot grid.
-  const step = Math.min(w, h) / 18;
-  g.fillStyle = 'rgba(110,90,70,0.16)';
-  for (let y = step / 2; y < h; y += step) for (let x = step / 2; x < w; x += step) g.fillRect(x, y, 3, 3);
-  const v = makeVignette(w, h, 0.22);
-  g.drawImage(v, 0, 0);
-  return c;
-}
-
-const TAPE = ['rgba(240,206,206,0.82)', 'rgba(198,222,238,0.82)', 'rgba(236,222,176,0.85)', 'rgba(206,232,204,0.82)'];
-const HAND = '"Segoe Print", "Bradley Hand", "Dancing Script", "Comic Sans MS", cursive';
-
-function drawCard(ctx: OffscreenCanvasRenderingContext2D, p: Polaroid, pose: Pose, i: number, drawPhoto: (x: number, y: number, w: number, h: number) => void, note: string | undefined) {
-  ctx.save();
-  ctx.translate(pose.cx, pose.cy);
-  ctx.rotate(pose.rot);
-  ctx.scale(pose.scale, pose.scale);
-  const x0 = -p.w / 2;
-  const y0 = -p.h / 2;
-  ctx.shadowColor = 'rgba(40,25,10,0.35)';
-  ctx.shadowBlur = p.w * 0.04;
-  ctx.shadowOffsetY = p.w * 0.015;
-  ctx.fillStyle = '#fbfaf6';
-  ctx.fillRect(x0, y0, p.w, p.h);
-  ctx.shadowColor = 'transparent';
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(x0 + p.inner.x, y0 + p.inner.y, p.inner.w, p.inner.h);
-  ctx.clip();
-  drawPhoto(x0 + p.inner.x, y0 + p.inner.y, p.inner.w, p.inner.h);
-  ctx.restore();
-  if (note) {
-    ctx.fillStyle = '#3a332c';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    let px = Math.round(p.w * 0.07);
-    ctx.font = `600 ${px}px ${HAND}`;
-    while (px > 12 && ctx.measureText(note).width > p.inner.w) ctx.font = `600 ${(px -= 2)}px ${HAND}`;
-    ctx.fillText(note, 0, y0 + p.inner.y + p.inner.h + (p.h - p.inner.y - p.inner.h) / 2);
-  }
-  // Washi tape across the top edge, with torn ends.
-  ctx.rotate((jitter(i, 9) * 6 * Math.PI) / 180);
-  const tw = p.w * 0.32;
-  const th = p.w * 0.075;
-  ctx.fillStyle = TAPE[i % TAPE.length];
-  ctx.beginPath();
-  const ty = y0 - th * 0.45;
-  ctx.moveTo(-tw / 2, ty);
-  for (let k = 0; k <= 6; k++) ctx.lineTo(-tw / 2 + (k % 2 ? 4 : 0), ty + (th * k) / 6);
-  ctx.lineTo(tw / 2, ty + th);
-  for (let k = 6; k >= 0; k--) ctx.lineTo(tw / 2 - (k % 2 ? 4 : 0), ty + (th * k) / 6);
-  ctx.closePath();
-  ctx.fill();
-  ctx.restore();
-}
-
-// ---- Accents (all looks): flash + sparkles on the chorus hit ------------------------
+// ---- Accents (flash + sparkles on the chorus hit) ----------------------------------
 
 function drawSparkle(ctx: OffscreenCanvasRenderingContext2D, x: number, y: number, r: number, rot: number) {
   ctx.save();
@@ -269,7 +252,7 @@ function drawSparkle(ctx: OffscreenCanvasRenderingContext2D, x: number, y: numbe
   ctx.restore();
 }
 
-function drawAccents(ctx: OffscreenCanvasRenderingContext2D, accents: number[], t: number, w: number, h: number, flash: boolean) {
+function drawAccents(ctx: OffscreenCanvasRenderingContext2D, accents: number[], t: number, w: number, h: number, flash: boolean, sparkle: boolean) {
   accents.forEach((a, n) => {
     const since = t - a;
     if (since < 0 || since > LOOKS.sparkleSec + 0.2) return;
@@ -280,6 +263,7 @@ function drawAccents(ctx: OffscreenCanvasRenderingContext2D, accents: number[], 
         ctx.fillRect(0, 0, w, h);
       }
     }
+    if (!sparkle) return;
     ctx.save();
     ctx.fillStyle = '#fff';
     ctx.shadowColor = 'rgba(255,240,200,0.9)';
@@ -294,6 +278,7 @@ function drawAccents(ctx: OffscreenCanvasRenderingContext2D, accents: number[], 
     ctx.restore();
   });
 }
+
 
 
 /** Lower-left, above where Instagram puts its buttons and caption. */
@@ -326,97 +311,356 @@ function drawCaption(ctx: OffscreenCanvasRenderingContext2D, c: Caption, t: numb
   ctx.restore();
 }
 
+
+/** Light grain + vignette only (film strip). */
+function grainOver(ctx: Ctx, kit: FilmKit, frame: number, alpha: number, w: number, h: number) {
+  ctx.save();
+  ctx.globalCompositeOperation = 'overlay';
+  ctx.globalAlpha = alpha;
+  ctx.drawImage(kit.grain[frame % kit.grain.length], 0, 0, w, h);
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.drawImage(kit.vignette, 0, 0);
+  ctx.restore();
+}
+
+
+// ---- Shared text helpers ---------------------------------------------------------------
+
+const SANS = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+const SERIF = '"Didot", "Bodoni 72", "Bodoni MT", "Playfair Display", "Noto Serif Display", "Noto Serif", Georgia, serif';
+const MONO = '"Courier New", ui-monospace, monospace';
+
+function spacing(ctx: Ctx, px: number) {
+  if ('letterSpacing' in ctx) (ctx as unknown as { letterSpacing: string }).letterSpacing = `${Math.round(px)}px`;
+}
+
+/** Largest font size (≤ max) at which `text` fits `width`. */
+function fitFont(ctx: Ctx, text: string, font: (px: number) => string, width: number, max: number): number {
+  let px = Math.round(max);
+  ctx.font = font(px);
+  const m = ctx.measureText(text).width;
+  if (m > width) px = Math.max(10, Math.floor((px * width) / m));
+  ctx.font = font(px);
+  return px;
+}
+
+function roundRect(ctx: Ctx, x: number, y: number, w: number, h: number, r: number) {
+  ctx.beginPath();
+  if (typeof ctx.roundRect === 'function') ctx.roundRect(x, y, w, h, r);
+  else ctx.rect(x, y, w, h);
+  ctx.fill();
+}
+
+// ---- The render loop ---------------------------------------------------------------------
+
 self.onmessage = async (e: MessageEvent<RenderRequest>) => {
   if (e.data.type !== 'render') return;
   const { clips, images, subjects, settings: s, style, audio } = e.data;
   const W = s.width;
   const H = s.height;
   const look = style.look ?? 'clean';
+  const motion = style.motion;
+  const vertical = H >= W;
+  coverLoss = COVER_LOSS[look];
   let enc: FrameEncoder | null = null;
   const shots = new Map<number, Shot>();
   try {
     enc = await createEncoder(s, audio);
     const ctx = enc.canvas.getContext('2d', { alpha: false })!;
-    // Incoming photo during a crossfade is drawn here, then blended in one step.
     const layer = new OffscreenCanvas(W, H);
     const lctx = layer.getContext('2d', { alpha: false })!;
     const frameDur = 1 / s.fps;
     const totalFrames = Math.round(timelineDuration(clips) * s.fps);
     const half = MOTION.fade / 2;
-    const card = look === 'scrapbook' ? polaroid(W, H) : null;
-    const paper = card ? makePaper(W, H) : null;
-    const film: FilmKit | null =
-      look === 'film' ? { grain: [1, 2, 3, 4].map((k) => makeGrain(W, H, k)), vignette: makeVignette(W, H, 0.5), cuts: clips.slice(1).map((c) => c.start) } : null;
-    // Scrapbook photos fill the polaroid window; other looks fill the frame.
-    const TW = card ? Math.round(card.inner.w) : W;
-    const TH = card ? Math.round(card.inner.h) : H;
-    const D = LOOKS.dropSec;
-    const fadeIn = (i: number) => !card && i > 0 && clips[i].transition === 'fade';
+    const starts = clips.map((c) => c.start);
+    const ends = clips.map((c) => c.start + c.duration);
+    const FULL: Rect = { x: 0, y: 0, w: W, h: H };
+    const accents = style.accents ?? [];
 
-    const shot = async (i: number) => {
-      let v = shots.get(i);
+    const grainKit: FilmKit | null =
+      look === 'film' || look === 'filmstrip'
+        ? { grain: [1, 2, 3, 4].map((k) => makeGrain(W, H, k)), vignette: makeVignette(W, H, look === 'film' ? 0.5 : 0.35), cuts: starts.slice(1) }
+        : null;
+    const strip = look === 'filmstrip' ? filmStrip(W, H) : null;
+    const boothBox = look === 'booth' ? booth(W, H) : null;
+    const groups = look === 'booth' ? boothGroups(clips.length) : [];
+    const mag = look === 'magazine' ? magazine(W, H) : null;
+    const pages = look === 'split' ? splitPages(clips.map((c) => c.duration), starts, accents) : [];
+    const pageOf = new Map<number, number[]>();
+    for (const p of pages) for (const k of p) pageOf.set(k, p);
+    // Magazine: a new colour each time the cover title (place/day) changes.
+    const palette: number[] = [];
+    clips.forEach((c, k) => {
+      const prev = k ? palette[k - 1] : -1;
+      const changed = k === 0 || style.titles[c.photoId] !== style.titles[clips[k - 1].photoId];
+      palette.push(changed ? (prev + 1) % MAG_PALETTE.length : prev);
+    });
+
+    const fadeIn = (k: number) => (look === 'clean' || look === 'film') && k > 0 && clips[k].transition === 'fade';
+    // When each photo starts and stops being on screen (drives the zoom).
+    const span = (k: number): [number, number] => {
+      if (look === 'filmstrip') return [starts[k] - LOOKS.slideSec, ends[k]];
+      if (look === 'booth' && groups[k]) {
+        const members = groups.map((g, j) => (g && g.strip === groups[k]!.strip ? j : -1)).filter((j) => j >= 0);
+        return [starts[k], ends[members[members.length - 1]]];
+      }
+      if (look === 'split' && pageOf.has(k)) {
+        const p = pageOf.get(k)!;
+        return [starts[k], ends[p[p.length - 1]]];
+      }
+      return [starts[k] - (fadeIn(k) ? half : 0), ends[k] + (k + 1 < clips.length && fadeIn(k + 1) ? half : 0)];
+    };
+    const progress = (k: number, t: number) => {
+      const [a, b] = span(k);
+      return (t - a) / Math.max(1e-3, b - a);
+    };
+    const shot = async (k: number) => {
+      let v = shots.get(k);
       if (!v) {
-        const c = clips[i];
-        v = await prepare(c, images[c.photoId], subjects[c.photoId] ?? [], TW, TH, style.motion);
-        shots.set(i, v);
+        const c = clips[k];
+        const [a, b] = span(k);
+        v = await prepare(images[c.photoId], subjects[c.photoId] ?? [], b - a);
+        shots.set(k, v);
       }
       return v;
     };
-    // Scrapbook: polaroid k lands on its beat after falling for D seconds (the first one lands at D).
-    const visibleFrom = (k: number) => (card ? (k === 0 ? 0 : clips[k].start - D) : clips[k].start - (fadeIn(k) ? half : 0));
-    // Motion runs over the whole time a photo is visible, crossfades and drop-ins included.
-    const progress = (k: number, t: number) => {
-      const c = clips[k];
-      const to = c.start + c.duration + (!card && k + 1 < clips.length && fadeIn(k + 1) ? half : 0);
-      const from = visibleFrom(k);
-      return (t - from) / Math.max(1e-3, to - from);
+    const punch = (k: number, t: number) => (motion && k > 0 && clips[k].transition !== 'fade' ? punchAt(t - starts[k]) : 1);
+
+    // -- clean / film: full frame, crossfades between beats --
+    const drawFull = async (t: number, i: number) => {
+      const c = clips[i];
+      let a = i;
+      let b = -1;
+      let alpha = 0;
+      if (fadeIn(i) && t < c.start + half) {
+        a = i - 1;
+        b = i;
+        alpha = 0.5 + (t - c.start) / MOTION.fade;
+      } else if (i + 1 < clips.length && fadeIn(i + 1) && t >= ends[i] - half) {
+        b = i + 1;
+        alpha = (t - (ends[i] - half)) / MOTION.fade;
+      }
+      drawInto(ctx, await shot(a), a, progress(a, t), FULL, motion, punch(a, t));
+      if (b >= 0 && alpha > 0) {
+        drawInto(lctx, await shot(b), b, progress(b, t), FULL, motion);
+        ctx.save();
+        ctx.globalAlpha = Math.min(1, alpha);
+        ctx.drawImage(layer, 0, 0);
+        ctx.restore();
+      }
     };
-    const punch = (k: number, t: number) => (style.motion && k > 0 && clips[k].transition !== 'fade' ? punchAt(t - clips[k].start) : 1);
+
+    // -- film strip --
+    const drawStrip = async (t: number, frame: number) => {
+      const fs = strip!;
+      const pos = stripPosition(starts, t);
+      const cur = Math.min(clips.length - 1, Math.round(pos));
+      drawBlur(ctx, await shot(cur), FULL, 0.55);
+      const along = (k: number) => fs.centre + (k - pos) * fs.pitch;
+      // The strip band, running past both ends of the screen.
+      ctx.fillStyle = '#16110d';
+      if (fs.vertical) ctx.fillRect(fs.cross0, 0, fs.cross, H);
+      else ctx.fillRect(0, fs.cross0, W, fs.cross);
+      const len = fs.vertical ? H : W;
+      for (let k = Math.max(0, Math.floor(pos) - 3); k <= Math.min(clips.length - 1, Math.ceil(pos) + 3); k++) {
+        const c = along(k);
+        const r: Rect = fs.vertical
+          ? { x: fs.cross0 + fs.margin, y: c - fs.frame.h / 2, w: fs.frame.w, h: fs.frame.h }
+          : { x: c - fs.frame.w / 2, y: fs.cross0 + fs.margin, w: fs.frame.w, h: fs.frame.h };
+        if ((fs.vertical ? r.y + r.h : r.x + r.w) < 0 || (fs.vertical ? r.y : r.x) > len) continue;
+        drawInto(ctx, await shot(k), k, progress(k, t), r, motion);
+        // Edge printing: frame numbers in the margins, like real film.
+        ctx.save();
+        ctx.fillStyle = '#e39b3a';
+        const px = Math.round(fs.margin * 0.26);
+        ctx.font = `700 ${px}px ${MONO}`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        const label = `▸ ${k + 1}A`;
+        if (fs.vertical) {
+          ctx.translate(fs.cross0 + fs.margin * 0.16, c);
+          ctx.rotate(-Math.PI / 2);
+          ctx.fillText(label, 0, 0);
+          ctx.setTransform(1, 0, 0, 1, fs.cross0 + fs.cross - fs.margin * 0.16, c + fs.frame.h * 0.3);
+          ctx.rotate(Math.PI / 2);
+          ctx.fillText(`VR 400   ${k + 1}`, 0, 0);
+        } else {
+          ctx.fillText(label, c, fs.cross0 + fs.margin * 0.16);
+          ctx.fillText(`VR 400   ${k + 1}`, c + fs.frame.w * 0.3, fs.cross0 + fs.cross - fs.margin * 0.16);
+        }
+        ctx.restore();
+      }
+      // Sprocket holes, moving with the strip.
+      const hp = fs.pitch / 6;
+      const off = ((((fs.centre - pos * fs.pitch) % hp) + hp) % hp) - hp;
+      const across = fs.margin * 0.36;
+      const alongSize = hp * 0.52;
+      ctx.fillStyle = 'rgba(236,228,212,0.92)';
+      for (let a = off; a < len + hp; a += hp) {
+        for (const side of [fs.cross0 + fs.margin * 0.56 - across / 2, fs.cross0 + fs.cross - fs.margin * 0.56 - across / 2]) {
+          if (fs.vertical) roundRect(ctx, side, a, across, alongSize, across * 0.22);
+          else roundRect(ctx, a, side, alongSize, across, across * 0.22);
+        }
+      }
+      grainOver(ctx, grainKit!, frame, 0.22, W, H);
+    };
+
+    // -- photo-booth strips --
+    const drawBoothStrip = async (t: number, stripNo: number, offX: number, rot: number) => {
+      const b = boothBox!;
+      const members = groups.map((g, j) => (g && g.strip === stripNo ? j : -1)).filter((j) => j >= 0);
+      ctx.save();
+      ctx.translate(W / 2 + offX, H / 2);
+      ctx.rotate(rot);
+      ctx.translate(-b.w / 2, -b.h / 2);
+      ctx.shadowColor = 'rgba(0,0,0,0.45)';
+      ctx.shadowBlur = b.w * 0.05;
+      ctx.shadowOffsetY = b.w * 0.015;
+      ctx.fillStyle = '#fbfaf6';
+      ctx.fillRect(0, 0, b.w, b.h);
+      ctx.shadowColor = 'transparent';
+      for (const k of members) {
+        const cell = b.cells[groups[k]!.cell];
+        if (t < starts[k]) {
+          ctx.fillStyle = '#e4e0d8';
+          ctx.fillRect(cell.x, cell.y, cell.w, cell.h);
+          continue;
+        }
+        drawInto(ctx, await shot(k), k, progress(k, t), cell, motion);
+        const f = flashAt(t - starts[k], 0.9, LOOKS.boothFlashSec);
+        if (f > 0) {
+          ctx.fillStyle = `rgba(255,255,255,${f})`;
+          ctx.fillRect(cell.x, cell.y, cell.w, cell.h);
+        }
+      }
+      const label = style.notes[clips[members[0]].photoId] ?? '';
+      if (label) {
+        ctx.fillStyle = '#2a2622';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        fitFont(ctx, label, (px) => `700 ${px}px ${MONO}`, b.label.w * 0.92, b.label.h * 0.34);
+        ctx.fillText(label, b.label.x + b.label.w / 2, b.label.y + b.label.h * 0.52);
+      }
+      ctx.restore();
+    };
+    const drawBooth = async (t: number, i: number) => {
+      const g = groups[i];
+      const next = i + 1 < clips.length ? groups[i + 1] : null;
+      const entering = next && next.cell === 0 && t >= starts[i + 1] - LOOKS.slideSec ? next.strip : null;
+      const u = entering !== null ? (t - (starts[i + 1] - LOOKS.slideSec)) / LOOKS.slideSec : 0;
+      const restRot = (n: number) => ((n % 2 ? 1 : -1) * 1.6 * Math.PI) / 180;
+      if (!g) {
+        drawInto(ctx, await shot(i), i, progress(i, t), FULL, motion, punch(i, t));
+      } else {
+        drawBlur(ctx, await shot(i), FULL, 0.4);
+        const out = entering !== null ? easeOutCubic(u) : 0;
+        await drawBoothStrip(t, g.strip, -out * W * 1.2, restRot(g.strip) - out * 0.15);
+      }
+      if (entering !== null) {
+        const e = easeOutBack(u, 1);
+        await drawBoothStrip(t, entering, (1 - e) * W * 1.2, restRot(entering) + (1 - e) * 0.2);
+      }
+    };
+
+    // -- magazine cover --
+    const drawMagazine = async (t: number, i: number) => {
+      const m = mag!;
+      const [bg, ink] = MAG_PALETTE[palette[i]];
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, W, H);
+      const title = (style.titles[clips[i].photoId] ?? '').toUpperCase();
+      const changed = i === 0 || style.titles[clips[i - 1].photoId] !== style.titles[clips[i].photoId];
+      const since = t - starts[i];
+      ctx.save();
+      ctx.fillStyle = ink;
+      ctx.textBaseline = 'alphabetic';
+      ctx.textAlign = 'left';
+      spacing(ctx, -m.title.w * 0.004);
+      const px = fitFont(ctx, title, (p) => `700 ${p}px ${SERIF}`, m.title.w, m.title.h * 1.2);
+      const rise = changed && motion ? (1 - easeOutCubic(since / 0.45)) * px * 0.25 : 0;
+      ctx.globalAlpha = changed && motion ? clamp01(since / 0.3) : 1;
+      // Vertical: letters sit on the photo's top edge, their feet tucked under it.
+      const base = m.vertical ? m.photo.y + px * 0.1 : m.title.y + px * 0.86;
+      ctx.fillText(title, m.title.x, base + rise);
+      ctx.restore();
+      // Photo with a soft shadow, over the bottom of the title.
+      ctx.save();
+      ctx.shadowColor = 'rgba(0,0,0,0.3)';
+      ctx.shadowBlur = W * 0.03;
+      ctx.shadowOffsetY = W * 0.01;
+      ctx.fillStyle = bg;
+      ctx.fillRect(m.photo.x, m.photo.y, m.photo.w, m.photo.h);
+      ctx.restore();
+      drawInto(ctx, await shot(i), i, progress(i, t), m.photo, motion, punch(i, t));
+      // Issue line.
+      ctx.save();
+      ctx.fillStyle = ink;
+      ctx.strokeStyle = ink;
+      ctx.globalAlpha = 0.85;
+      ctx.lineWidth = Math.max(1, W * 0.0015);
+      const fx = m.vertical ? m.photo.x : m.title.x;
+      const fw = m.vertical ? m.photo.w : m.title.w;
+      ctx.beginPath();
+      ctx.moveTo(fx, m.footerY - W * 0.022);
+      ctx.lineTo(fx + fw, m.footerY - W * 0.022);
+      ctx.stroke();
+      const small = Math.round(Math.min(W, H) * 0.026);
+      ctx.font = `600 ${small}px ${SANS}`;
+      spacing(ctx, small * 0.18);
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'left';
+      ctx.fillText(style.kickers[clips[i].photoId] ?? '', fx, m.footerY);
+      ctx.textAlign = 'right';
+      ctx.font = `italic 500 ${Math.round(small * 1.15)}px ${SERIF}`;
+      spacing(ctx, 0);
+      ctx.fillText('the travel issue', fx + fw, m.footerY);
+      ctx.restore();
+    };
+
+    // -- split-screen photo dump --
+    const drawSplit = async (t: number, i: number) => {
+      const page = pageOf.get(i) ?? [i];
+      if (page.length === 1) return drawInto(ctx, await shot(i), i, progress(i, t), FULL, motion, punch(i, t));
+      const step = page.indexOf(i);
+      const now = splitLayout(page.length, step, vertical);
+      const before = step > 0 ? splitLayout(page.length, step - 1, vertical) : now;
+      const u = step > 0 && motion ? easeOutCubic((t - starts[i]) / LOOKS.splitSec) : 1;
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, W, H);
+      const g = Math.min(W, H) * 0.008;
+      for (let j = 0; j <= step; j++) {
+        const to = now[j];
+        const from = j < step ? before[j] : vertical ? { ...to, y: to.y + 1 } : { ...to, x: to.x + 1 };
+        const r = lerpRect(from, to, u);
+        // Pixel rect with white gutters between cells (not at the screen edge).
+        const x0 = r.x * W + (r.x > 0.001 ? g / 2 : 0);
+        const y0 = r.y * H + (r.y > 0.001 ? g / 2 : 0);
+        const x1 = (r.x + r.w) * W - (r.x + r.w < 0.999 ? g / 2 : 0);
+        const y1 = (r.y + r.h) * H - (r.y + r.h < 0.999 ? g / 2 : 0);
+        const k = page[j];
+        drawInto(ctx, await shot(k), k, progress(k, t), { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }, motion);
+      }
+    };
 
     let i = 0;
     let keyAt = -1;
     for (let frame = 0; frame < totalFrames; frame++) {
       const t = (frame + 0.5) * frameDur;
-      while (i + 1 < clips.length && t >= clips[i + 1].start) i++;
-      // Free photos that are done (scrapbook keeps two under the top card).
-      for (const k of [...shots.keys()]) if (k < i - 2) (shots.get(k)!.full.close(), shots.delete(k));
+      while (i + 1 < clips.length && t >= starts[i + 1]) i++;
+      for (const k of [...shots.keys()]) if (k < i - 3) (shots.get(k)!.full.close(), shots.delete(k));
       const c = clips[i];
 
-      if (card && paper) {
-        ctx.drawImage(paper, 0, 0);
-        for (let k = Math.max(0, i - 2); k <= Math.min(clips.length - 1, i + 1); k++) {
-          if (t < visibleFrom(k)) continue;
-          const u = (t - visibleFrom(k)) / D;
-          const pose = u >= 1 ? restingPose(k, W, H) : dropPose(k, u, W, H);
-          const sh = await shot(k);
-          const p = progress(k, t);
-          drawCard(ctx, card, pose, k, (x, y, w, h) => drawShot(ctx, sh, k, p, w, h, 1, x, y), style.notes[clips[k].photoId]);
-        }
-      } else {
-        const end = c.start + c.duration;
-        let a = i; // drawn underneath
-        let b = -1; // blended on top
-        let alpha = 0;
-        if (fadeIn(i) && t < c.start + half) {
-          a = i - 1;
-          b = i;
-          alpha = 0.5 + (t - c.start) / MOTION.fade;
-        } else if (i + 1 < clips.length && fadeIn(i + 1) && t >= end - half) {
-          b = i + 1;
-          alpha = (t - (end - half)) / MOTION.fade;
-        }
-        drawShot(ctx, await shot(a), a, progress(a, t), W, H, punch(a, t));
-        if (b >= 0 && alpha > 0) {
-          drawShot(lctx, await shot(b), b, progress(b, t), W, H);
-          ctx.save();
-          ctx.globalAlpha = Math.min(1, alpha);
-          ctx.drawImage(layer, 0, 0);
-          ctx.restore();
-        }
-        if (film) drawFilm(ctx, film, t, frame, i, style.stamps[c.photoId], W, H);
+      if (look === 'filmstrip') await drawStrip(t, frame);
+      else if (look === 'booth') await drawBooth(t, i);
+      else if (look === 'magazine') await drawMagazine(t, i);
+      else if (look === 'split') await drawSplit(t, i);
+      else {
+        await drawFull(t, i);
+        if (look === 'film') drawFilm(ctx, grainKit!, t, frame, i, style.stamps[c.photoId], W, H);
       }
-      drawAccents(ctx, style.accents ?? [], t, W, H, !card);
-      if (!card) for (const cap of style.captions) if (t >= cap.start && t < cap.end) drawCaption(ctx, cap, t, W, H);
+      drawAccents(ctx, accents, t, W, H, FLASH.has(look), SPARKLES.has(look));
+      if (OVERLAY_CAPTIONS.has(look)) for (const cap of style.captions) if (t >= cap.start && t < cap.end) drawCaption(ctx, cap, t, W, H);
 
       // Keyframe where each photo starts (cheap seeking, clean cuts).
       const key = keyAt !== i;

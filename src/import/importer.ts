@@ -192,8 +192,10 @@ export async function importPhotos(
   picked: File[],
   onProgress: (done: number, total: number) => void,
   onCopying: (done: number, total: number) => void = () => {},
+  /** False for files already in memory (Google Drive downloads): no copy needed. */
+  copy = true,
 ): Promise<ImportResult> {
-  const { copies: files, unreadable } = await snapshot(picked, onCopying);
+  const { copies: files, unreadable } = copy ? await snapshot(picked, onCopying) : { copies: picked, unreadable: [] as string[] };
   const queue: Item[] = files.map((file) => ({ id: `p${nextId++}`, file, attempts: 0 }));
   const byId = new Map(queue.map((i) => [i.id, i.file]));
   const photos: Photo[] = [];

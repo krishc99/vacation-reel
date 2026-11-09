@@ -29,6 +29,10 @@
           <span class="drop__title">Choose photos or drop them here</span>
           <span class="drop__hint">JPEG, HEIC, PNG or WebP. Bring the whole album: near-duplicates and weak shots are sorted out for you.</span>
         </label>
+        <form id="drive-form" class="drive" hidden>
+          <input id="drive-link" type="url" inputmode="url" placeholder="…or paste a Google Drive folder link" aria-label="Google Drive folder link" required />
+          <button class="btn" type="submit">Add from Drive</button>
+        </form>
         <p id="import-status" class="status" aria-live="polite"></p>
         <p id="people-status" class="status" aria-live="polite"></p>
         <p id="scene-status" class="status" aria-live="polite"></p>
@@ -89,8 +93,11 @@
         <h2 id="step-make">Make the reel</h2>
         <fieldset class="seg" aria-label="Look">
           <label><input type="radio" name="look" id="look-clean" value="clean" checked /> <span>Clean</span></label>
-          <label><input type="radio" name="look" id="look-film" value="film" /> <span>Film <small>grain, light leaks, date stamp</small></span></label>
-          <label><input type="radio" name="look" id="look-scrapbook" value="scrapbook" /> <span>Scrapbook <small>polaroids on paper</small></span></label>
+          <label><input type="radio" name="look" id="look-film" value="film" /> <span>Film</span></label>
+          <label><input type="radio" name="look" id="look-filmstrip" value="filmstrip" /> <span>Film strip</span></label>
+          <label><input type="radio" name="look" id="look-booth" value="booth" /> <span>Photo booth</span></label>
+          <label><input type="radio" name="look" id="look-magazine" value="magazine" /> <span>Magazine</span></label>
+          <label><input type="radio" name="look" id="look-split" value="split" /> <span>Split screen</span></label>
         </fieldset>
         <div class="style-options">
           <label class="check" for="opt-motion">
