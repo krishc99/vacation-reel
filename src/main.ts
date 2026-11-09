@@ -18,6 +18,8 @@ import { excerpt, loadSong, type Song } from './audio/song';
 import { maxPhotosForMusic, planMusicTimeline, songParts, type SongStart } from './render/musicTimeline';
 import { renderReel, type RenderJob } from './render/renderer';
 import { DRIVE_CLIENT_ID, DRIVE_KEY, downloadDrive, listDrive, loadGoogleSignIn, signIn, type DriveAuth } from './import/drive';
+import { hamming } from './analysis/dhash';
+import { buildReport } from './debug/report';
 import { buildCaptions, loadPlaces, nearestPlace, photoLabels } from './render/captions';
 import type { Look } from './render/looks';
 import { frameFor } from './render/crop';
@@ -125,6 +127,17 @@ async function addFiles(list: FileList | File[], fromDrive: { skipped: { name: s
       !fromDrive,
     );
     if (fromDrive) skipped.unshift(...fromDrive.skipped);
+    // The same picture added twice (e.g. "IMG_1.jpg" and "IMG_1 (1).jpg", or picked again): keep one.
+    const kept: Photo[] = [];
+    for (const p of added) {
+      const twin = [...photos, ...kept].find(
+        (q) => q.width === p.width && q.height === p.height && Math.abs(q.takenAt - p.takenAt) < 2000 && hamming(q.dhash, p.dhash) <= 2,
+      );
+      if (twin) skipped.push({ name: p.name, reason: `Same picture as ${twin.name}, kept once.` });
+      else kept.push(p);
+    }
+    added.length = 0;
+    added.push(...kept);
     photos = sortByTime([...photos, ...added]);
     analysis = analyzeAlbum(photos);
     // Burst ids are positional, so keeper picks don't survive a re-analysis.
@@ -152,6 +165,40 @@ async function addFiles(list: FileList | File[], fromDrive: { skipped: { name: s
     el.drop.classList.remove('is-busy');
   }
 }
+
+// Debug report: how the app saw the album and why it picked what it did.
+document.getElementById('debug-report')!.addEventListener('click', async (ev) => {
+  const btn = ev.currentTarget as HTMLButtonElement;
+  if (!analysis) return;
+  btn.disabled = true;
+  const label = btn.textContent;
+  btn.textContent = 'Building report…';
+  try {
+    const plan = currentPlan();
+    const blob = await buildReport(
+      {
+        photos,
+        analysis,
+        scores: lastScores,
+        who,
+        persons,
+        picks: plan.picks,
+        candidates: candidateIds(analysis, overrides),
+        settings: { ...settings, song: song?.name ?? null, songStart, songPart, me: who.me ?? null },
+        build: __BUILD__,
+      },
+      (document.getElementById('debug-thumbs') as HTMLInputElement).checked,
+    );
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `vacation-reel-debug-${new Date().toISOString().slice(0, 16).replace(':', '')}.html`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+});
 
 // Google Drive: paste a folder link shared as "Anyone with the link".
 const driveForm = document.getElementById('drive-form') as HTMLFormElement;

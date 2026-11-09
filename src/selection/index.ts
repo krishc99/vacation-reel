@@ -1,3 +1,4 @@
+import { hamming } from '../analysis/dhash';
 import type { Photo } from '../types';
 
 export interface Selection {
@@ -152,7 +153,21 @@ export function dedupeReel(
     const [a, b] = pair;
     const qa = quality(a);
     const qb = quality(b);
-    let [keep, drop] = Math.abs(qa - qb) > 0.05 ? (qa > qb ? [a, b] : [b, a]) : score(a) >= score(b) ? [a, b] : [b, a];
+    // Same pose, different crowd: the one with more of you together wins unless it's clearly blurrier.
+    const na = who.known ? who.friends(a).length : (a.people?.count ?? 0);
+    const nb = who.known ? who.friends(b).length : (b.people?.count ?? 0);
+    let [keep, drop] =
+      na !== nb && Math.abs(qa - qb) <= 0.25
+        ? na > nb
+          ? [a, b]
+          : [b, a]
+        : Math.abs(qa - qb) > 0.05
+          ? qa > qb
+            ? [a, b]
+            : [b, a]
+          : score(a) >= score(b)
+            ? [a, b]
+            : [b, a];
     // Don't lose someone's only photo: then drop the other one.
     const count = new Map<string, number>();
     for (const q of picks) for (const f of who.friends(q)) count.set(f, (count.get(f) ?? 0) + 1);
@@ -245,12 +260,16 @@ function fillOthers(others: Photo[], slots: number, score: (p: Photo) => number)
 }
 
 /** CLIP image similarity at or above which two photos count as "the same shot again". */
-export const SIMILAR = 0.88;
+export const SIMILAR = 0.86;
 
 export function clipSim(a: Photo, b: Photo): number {
   const x = a.scene?.embedding;
   const y = b.scene?.embedding;
-  if (!x || !y || x.length !== y.length) return 0;
+  if (!x || !y || x.length !== y.length) {
+    // No scene check for one of them (yet): fall back to the picture fingerprint, so
+    // the same shot twice still counts as a repeat.
+    return a.dhash && b.dhash && hamming(a.dhash, b.dhash) <= 6 ? 0.95 : 0;
+  }
   let s = 0;
   for (let i = 0; i < x.length; i++) s += x[i] * y[i];
   return s;

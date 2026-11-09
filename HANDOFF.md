@@ -190,6 +190,14 @@ selection     SIMILAR .9 → .88. dedupeReel (last pass in chooseReel, also when
 looks         Cells never cut people: frameFor(…, maxCoverLoss, peopleMaxLoss) with COVER_LOSS {split .5, booth .45} and PEOPLE_LOSS {split .35, booth .35, filmstrip .2, magazine .2}, applied only to cells (full-screen photos keep the normal rules). Film strip: frame length follows each photo's aspect (stripLayout/alongAt; style.aspects from Photo.width/height), strip swings ±4° per beat, push-zoom on landing, gate weave, motion smear while sliding, warm flare on landing, flicker, unexposed next frames dimmer. Magazine: colours from the photo (paletteOf: saturation-weighted hue → pale paper or deep shade; title in the photo's most vivid hue), eased over .35 s; photo box keeps the photo's shape, centred. Split: 4 two-photo + 4 three-photo arrangements, entry from bottom/top/left/right/pop, per page (splitVariant, never same twice in a row), easeOutBack settle
 ```
 
+## 7j. Duplicates / equal time / debug report (Krish: "still duplicates; everyone equally if no Me; similar pose → more people")
+```
+import        same picture twice (same size, time within 2 s, dHash ≤ 2) → kept once, reported in skipped
+selection     clipSim falls back to dHash (≤ 6 → .95) when a photo has no CLIP embedding (scene check skipped/unfinished) — repeats were invisible before. SIMILAR .88 → .86. dedupeReel: near-repeat pair with different friend counts → keep the one with more people unless Q gap > .25. pickChapter: REEL.balance .07 × average earlier appearances of the photo's people (me exempt) → equal time
+debug         Order section → "Download debug report" (src/debug/report.ts): HTML with optional 160 px thumbnails + embedded JSON (#data): per photo name/time/gps/burst/status/q/issues/scene top-3/hasClip/faces (h, yaw, id, covered, blink, smile)/friends/score parts/nearest photo (clip, dhash); reelPairs (clip ≥ .75 or dhash ≤ 12); people (photos, moments, in reel). Parse: re.search(r'id="data">(.*)</script>')
+open          group6 test: MediaPipe-on-crop blink .49–.65 on smiling faces → "3 eyes closed" (check against Krish's report before tuning maxBlink)
+```
+
 ## 7f. Milestone 6 scope — fun modes (plan)
 Funny (jawOpen/mouthPucker/cheekPuff/eyeWide*/browInnerUp high; wink OK, half-closed both = blink), Laugh (eyes closed + big smile + open jaw), Scenic from behind (shoulders, no nose/eyes; judge scenery sharpness + framing, people small), Jump/arms up (wrists above head; highest body frame in burst). Intentional vs accidental: shared or held deviations intentional; one person in one frame accidental. A burst can yield several keepers (one per mode). Mix ~1 fun per 4–5 classic, spread out (M7 sequencing).
 

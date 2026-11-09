@@ -14,6 +14,8 @@ export const REEL = {
   simFloor: 0.6,
   /** Bonus for a friend not yet in the reel. */
   newFriend: 0.15,
+  /** Without "me": per earlier appearance of the people in a photo (average), so everyone gets about equal time. */
+  balance: 0.07,
   /** Food: at most this share of the reel (min 1) unless nothing else is left. */
   foodShare: 0.1,
   beamWidth: 12,
@@ -71,6 +73,8 @@ function pickChapter(
   const out: Photo[] = [];
   const pool = [...group];
   const shownFriends = new Set(chosen.flatMap((p) => who.friends(p)));
+  const shown = new Map<string, number>();
+  for (const p of chosen) for (const f of who.friends(p)) shown.set(f, (shown.get(f) ?? 0) + 1);
   let establishing = false;
   const simTo = (p: Photo) => Math.max(0, ...[...chosen, ...out].map((q) => clipSim(p, q)));
   while (out.length < slots && pool.length) {
@@ -86,7 +90,14 @@ function pickChapter(
       if (isFood(p) && food.used >= food.cap && pool.some((q) => !isFood(q))) continue;
       const sim = simTo(p);
       const fresh = who.friends(p).filter((f) => !shownFriends.has(f)).length;
-      const v = score(p) - REEL.lambda * Math.max(0, (sim - REEL.simFloor) / (1 - REEL.simFloor)) + REEL.newFriend * Math.min(fresh, 2);
+      // Equal time: people already shown a lot pull a photo down (you're exempt once marked).
+      const fs = who.friends(p).filter((f) => f !== who.me);
+      const seen = fs.length ? fs.reduce((acc, f) => acc + (shown.get(f) ?? 0), 0) / fs.length : 0;
+      const v =
+        score(p) -
+        REEL.lambda * Math.max(0, (sim - REEL.simFloor) / (1 - REEL.simFloor)) +
+        REEL.newFriend * Math.min(fresh, 2) -
+        REEL.balance * seen;
       if (v > bestV) {
         bestV = v;
         best = i;
@@ -96,7 +107,10 @@ function pickChapter(
     const [p] = pool.splice(best, 1);
     if (!isPeoplePhoto(p, who)) establishing = true;
     if (isFood(p)) food.used++;
-    who.friends(p).forEach((f) => shownFriends.add(f));
+    who.friends(p).forEach((f) => {
+      shownFriends.add(f);
+      shown.set(f, (shown.get(f) ?? 0) + 1);
+    });
     out.push(p);
   }
   return out;
