@@ -269,6 +269,12 @@ function showSkipped(skipped: { name: string; reason: string }[]) {
   el.skipped.hidden = skipped.length === 0;
 }
 
+// iPhone/iPad: a plain "image/*" filter. File extensions in the filter (".heic")
+// can leave iOS's photo picker unable to confirm the selection. iOS hands over
+// HEIC or JPEG either way, and both are read.
+const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+if (isIOS) el.fileInput.accept = 'image/*';
+
 el.fileInput.addEventListener('change', () => {
   if (el.fileInput.files) addFiles(el.fileInput.files);
   el.fileInput.value = '';
