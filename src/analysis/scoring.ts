@@ -118,9 +118,12 @@ export interface ScoreContext {
 
 export function scorePhotos(photos: Photo[], ctx: ScoreContext, w = SCORE_WEIGHTS): Map<string, PhotoScore> {
   const maxBurst = Math.max(1, ...photos.map(ctx.burstSize));
-  // No cap on group size (Krish): every extra person adds; the album's biggest group gets full credit.
-  const countOf = (p: Photo) => (ctx.who.known ? ctx.who.friends(p).length : (p.people?.count ?? 0));
-  const maxGroup = Math.max(1, ...photos.map(countOf));
+  // No cap on group size (Krish): every extra person adds. The scale is the size
+  // of your group (the friends who keep appearing), not the most faces in any one
+  // photo: dividing by the latter (one crowded photo) squashed the difference
+  // between a couple and a group, so landmarks and "first photo of a chapter"
+  // started outranking group shots.
+  const groupSize = ctx.who.known ? Math.max(3, new Set(photos.flatMap((p) => ctx.who.friends(p))).size) : 5;
   const raw = photos.map((p) => {
     const v = ctx.verdicts.get(p.id);
     const people = isPeoplePhoto(p, ctx.who);
@@ -147,7 +150,7 @@ export function scorePhotos(photos: Photo[], ctx: ScoreContext, w = SCORE_WEIGHT
     const hl = highlightOf(p.scene?.embedding);
     const M =
       // Bigger groups always count more (Krish: prefer the photos with more of us together, no cap).
-      0.45 * (nFriends / maxGroup) +
+      0.45 * (nFriends / groupSize) +
       0.15 * me +
       0.15 * (Math.log(1 + ctx.burstSize(p)) / Math.log(1 + maxBurst)) +
       0.15 * hl.strength +

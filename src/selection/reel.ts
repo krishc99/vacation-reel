@@ -228,7 +228,13 @@ export function sequence(picks: Photo[], groups: Photo[][], scores: Map<string, 
   let out = groups.flatMap((g) => orderChapter(g.filter((p) => inReel.has(p) && dated.has(p)), who));
   const s = (p: Photo) => scores.get(p.id);
   if (out.length >= 3) {
-    const hook = [...out].sort((a, b) => (s(b)?.score ?? 0) - (s(a)?.score ?? 0))[0];
+    // Cover / opening photo: the best group photo (Krish), i.e. the best-scoring
+    // pick among those with the most people; any photo if there's no group.
+    const n = (p: Photo) => (who.known ? who.friends(p).length : (p.people?.count ?? 0));
+    const most = Math.max(...out.map(n));
+    const groups = out.filter((p) => n(p) >= Math.max(3, Math.ceil(most * 0.6)));
+    const pool = groups.length ? groups : out;
+    const hook = [...pool].sort((a, b) => (s(b)?.score ?? 0) - (s(a)?.score ?? 0))[0];
     out = [hook, ...out.filter((p) => p !== hook)];
     const rest = out.slice(1);
     const finale = [...rest].sort((a, b) => (s(b)?.M ?? 0) - (s(a)?.M ?? 0))[0];

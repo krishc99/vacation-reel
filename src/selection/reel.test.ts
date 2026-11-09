@@ -78,7 +78,7 @@ describe('sequence keeps the story in order', () => {
 });
 
 describe('sequence', () => {
-  it('opens on the best photo, ends on the biggest moment, and leads chapters with a scenic shot', () => {
+  it('opens on the best group photo, ends on the biggest moment, and leads chapters with a scenic shot', () => {
     n = 0;
     const a = mk({ t: 0, people: 2, label: 'people' });
     const b = mk({ t: 0.2, label: 'landmark' });
@@ -93,8 +93,8 @@ describe('sequence', () => {
       [e.id, { score: 0.3, M: 0.1 }],
     ] as [string, PhotoScore][]);
     const order = sequence([a, b, c, d, e], [[a, b, c, d, e]], scores, who).map((p) => p.id);
-    expect(order[0]).toBe(c.id); // hook
-    expect(order[order.length - 1]).toBe(d.id); // finale
+    expect(order[0]).toBe(d.id); // cover: the group photo (3 people), not the higher-scoring solo
+    expect(order[order.length - 1]).toBe(a.id); // finale: biggest moment of the rest
     expect(order[1]).toBe(b.id); // establishing landmark leads the chapter
   });
 });
