@@ -42,7 +42,19 @@ export interface ReelSettings {
   maxSeconds: number;
   minSeconds: number;
   bitrate: number;
+  /** "All the best": every photo that survives the checks, as long as that takes (up to maxSeconds). */
+  takeAll?: boolean;
 }
+
+export type ReelLength = '30' | '60' | '90' | 'all';
+
+/** Instagram allows reels up to 3 minutes. Longer reels get a lower bitrate so the file stays phone-sized. */
+export const LENGTHS: Record<ReelLength, { maxSeconds: number; bitrate: number; takeAll: boolean }> = {
+  '30': { maxSeconds: 30, bitrate: 10_000_000, takeAll: false },
+  '60': { maxSeconds: 60, bitrate: 8_000_000, takeAll: false },
+  '90': { maxSeconds: 90, bitrate: 6_000_000, takeAll: false },
+  all: { maxSeconds: 180, bitrate: 5_000_000, takeAll: true },
+};
 
 export type Shape = 'vertical' | 'horizontal';
 

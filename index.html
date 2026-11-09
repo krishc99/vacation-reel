@@ -29,6 +29,7 @@
           <span class="drop__title">Choose photos or drop them here</span>
           <span class="drop__hint">JPEG, HEIC, PNG or WebP. Bring the whole album: near-duplicates and weak shots are sorted out for you.</span>
         </label>
+        <button id="ios-picker" class="btn btn--quiet linkish" type="button" hidden></button>
         <form id="drive-form" class="drive" hidden>
           <input id="drive-link" type="url" inputmode="url" placeholder="…or paste a Google Drive folder link" aria-label="Google Drive folder link" required />
           <button class="btn" type="submit">Add from Drive</button>
@@ -47,6 +48,12 @@
         <fieldset class="seg" aria-label="Video shape">
           <label><input type="radio" name="shape" id="shape-vertical" value="vertical" checked /> <span>Vertical 9:16 <small>Reels</small></span></label>
           <label><input type="radio" name="shape" id="shape-horizontal" value="horizontal" /> <span>Horizontal 16:9</span></label>
+        </fieldset>
+        <fieldset class="seg" aria-label="Reel length">
+          <label><input type="radio" name="length" id="length-30" value="30" checked /> <span>30 s</span></label>
+          <label><input type="radio" name="length" id="length-60" value="60" /> <span>60 s</span></label>
+          <label><input type="radio" name="length" id="length-90" value="90" /> <span>90 s</span></label>
+          <label><input type="radio" name="length" id="length-all" value="all" /> <span>All the best <small>up to 3 min</small></span></label>
         </fieldset>
         <div id="friends" class="friends" hidden>
           <ul id="friend-list" class="friends__list"></ul>

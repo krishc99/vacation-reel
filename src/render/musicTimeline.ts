@@ -32,10 +32,19 @@ export const MUSIC_DEFAULTS = {
   finaleExtraBeats: 8,
   /** Upper bound only; the real count comes from how long the chorus is at the chosen pace. */
   maxPhotos: 40,
+  /** Reels longer than this keep going past the chorus instead of ending with it. */
+  chorusOnlyUpTo: 31,
 };
 
 function beatPeriod(a: BeatAnalysis): number {
   return a.bpm > 0 ? 60 / a.bpm : 0.5;
+}
+
+/** Seconds of reel the song can carry from `startBeat` (the setting, or what's left of the song). */
+function seconds(a: BeatAnalysis, s: ReelSettings, startBeat: number): number {
+  const from = a.beats.length ? a.beats[Math.min(startBeat, a.beats.length - 1)] : 0;
+  const left = a.duration > 0 ? a.duration - from - 0.5 : Infinity;
+  return Math.max(4 * beatPeriod(a), Math.min(s.maxSeconds, left));
 }
 
 /** Whole bars (4 beats) closest to leadInSec, at least one bar. */
@@ -76,16 +85,19 @@ export function maxPhotosForMusic(a: BeatAnalysis, s: ReelSettings, mode: SongSt
   const P = beatPeriod(a);
   const k = preferredK(P);
   const lead = leadFor(mode, P);
-  const budget = Math.floor(s.maxSeconds / P + 1e-6);
-  let n = MUSIC_DEFAULTS.maxPhotos;
-  if (mode === 'best') {
-    const target = targetSpan(a, s, part, 15);
+  const long = s.maxSeconds > MUSIC_DEFAULTS.chorusOnlyUpTo;
+  const target = mode === 'best' ? targetSpan(a, s, part, 15) : null;
+  const first = a.downbeatPhase < a.beats.length ? a.downbeatPhase : 0;
+  const maxSec = seconds(a, s, target ? target.start : first);
+  const budget = Math.floor(maxSec / P + 1e-6);
+  let n = long ? Math.ceil(maxSec / (k * P)) + 2 : MUSIC_DEFAULTS.maxPhotos;
+  if (mode === 'best' && !long) {
     if (target) {
       const hold = k * MUSIC_DEFAULTS.holdFactor;
       n = Math.min(n, 2 + Math.floor((Math.min(target.lead + target.section, budget) - target.lead - hold) / k));
     }
   }
-  while (n > 1 && sum(layout(n, k, lead)) * P > s.maxSeconds + 1e-6) n--;
+  while (n > 1 && sum(layout(n, k, lead)) * P > maxSec + 1e-6) n--;
   return Math.max(1, n);
 }
 
@@ -162,7 +174,7 @@ export function planMusicTimeline(photoIds: string[], a: BeatAnalysis, s: ReelSe
   const n = photoIds.length;
   const P = beatPeriod(a);
   const first = a.downbeatPhase < a.beats.length ? a.downbeatPhase : 0;
-  const budget = Math.floor(s.maxSeconds / P + 1e-6);
+  const long = s.maxSeconds > MUSIC_DEFAULTS.chorusOnlyUpTo;
 
   let start = first;
   let highlightBeat: number | null = null;
@@ -172,12 +184,14 @@ export function planMusicTimeline(photoIds: string[], a: BeatAnalysis, s: ReelSe
     const t = targetSpan(a, s, part, n);
     if (t) ({ highlight: highlightBeat, start, lead, section } = t);
   }
+  const maxSec = seconds(a, s, start);
+  const budget = Math.floor(maxSec / P + 1e-6);
 
   // Candidate end points, measured from the highlight (or the start), in 2-bar phrases.
   let beatsLayout: number[] | null = null;
   let covers = false;
   const tries: number[] = [];
-  if (section !== null) {
+  if (section !== null && !long) {
     tries.push(section);
     for (let c = section - 8; c >= 8; c -= 8) tries.push(c);
     for (let c = section + 8; lead + c <= budget; c += 8) tries.push(c);
@@ -185,7 +199,7 @@ export function planMusicTimeline(photoIds: string[], a: BeatAnalysis, s: ReelSe
     for (let c = 8 * Math.floor(budget / 8); c >= 8; c -= 8) tries.push(c);
   }
   for (const c of tries) {
-    if ((lead + c) * P > s.maxSeconds + 1e-6) continue;
+    if ((lead + c) * P > maxSec + 1e-6) continue;
     const fit = fitExactly(n, lead + c, lead, P);
     if (fit) {
       beatsLayout = fit;
@@ -194,7 +208,7 @@ export function planMusicTimeline(photoIds: string[], a: BeatAnalysis, s: ReelSe
     }
   }
   // Fallback (unusual photo counts): previous fixed layout.
-  if (!beatsLayout) beatsLayout = layout(n, chooseK(n, P, s, lead), lead);
+  if (!beatsLayout) beatsLayout = layout(n, chooseK(n, P, { ...s, maxSeconds: maxSec }, lead), lead);
   const k = beatsLayout.length > 2 ? beatsLayout[1] : beatsLayout[0];
 
   const t0 = beatAt(a, start);

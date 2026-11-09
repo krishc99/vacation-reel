@@ -121,6 +121,8 @@ async function init(base: string): Promise<string[]> {
     sface = await stage(sfaceModel, () =>
       ort.InferenceSession.create(sfaceBytes, {
         executionProviders: ['wasm'],
+        enableCpuMemArena: false,
+        enableMemPattern: false,
         logSeverityLevel: 3, // the model's graph triggers harmless optimiser warnings
       }),
     );

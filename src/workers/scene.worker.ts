@@ -45,7 +45,14 @@ self.onmessage = async (e: MessageEvent<SceneRequest>) => {
     try {
       ort.env.wasm.numThreads = 1;
       ort.env.wasm.wasmBinary = await fetchBytes(new URL('ort/ort-wasm-simd-threaded.wasm', msg.base).href);
-      session = await ort.InferenceSession.create(await fetchBytes(model), { executionProviders: ['wasm'], logSeverityLevel: 3 });
+      // Memory-lean settings: no pre-allocated arena or memory plan (phones,
+      // especially iPhones, cap a page's WebAssembly memory well below desktops).
+      session = await ort.InferenceSession.create(await fetchBytes(model), {
+        executionProviders: ['wasm'],
+        logSeverityLevel: 3,
+        enableCpuMemArena: false,
+        enableMemPattern: false,
+      });
       post({ type: 'ready' });
     } catch (err) {
       let why = 'blocked or offline (no response)';

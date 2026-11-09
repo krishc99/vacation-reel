@@ -64,10 +64,27 @@ describe('planMusicTimeline', () => {
     expect(planMusicTimeline(ids(max), a, DEFAULT_SETTINGS, 'best').duration).toBeLessThanOrEqual(30);
   });
 
-  it('extends past the last beat when the song is short', () => {
+  it('still shows every photo when the song is short, at a quicker pace', () => {
     const a = grid(120, 8);
     const plan = planMusicTimeline(ids(12), a, DEFAULT_SETTINGS, 'start');
     expect(plan.clips).toHaveLength(12);
-    expect(plan.duration).toBeGreaterThan(8);
+    expect(plan.clips.every((c) => c.duration >= 0.5 - 1e-6)).toBe(true);
+  });
+});
+
+describe('long reels', () => {
+  it('60 s and "all" go past the chorus, every cut on a beat, never past the end of the song', async () => {
+    const { LENGTHS } = await import('../types');
+    const a = grid(120, 150);
+    for (const len of ['60', 'all'] as const) {
+      const s = { ...DEFAULT_SETTINGS, ...LENGTHS[len] };
+      const n = maxPhotosForMusic(a, s, 'best');
+      expect(n).toBeGreaterThan(40);
+      const plan = planMusicTimeline(ids(n), a, s, 'best');
+      expect(plan.duration).toBeGreaterThan(35);
+      expect(plan.duration).toBeLessThanOrEqual(s.maxSeconds + 1e-6);
+      expect(plan.audioStart + plan.duration).toBeLessThanOrEqual(a.duration);
+      for (const c of plan.clips) expect(a.beats.some((b) => Math.abs(b - (plan.audioStart + c.start)) < 1e-9)).toBe(true);
+    }
   });
 });

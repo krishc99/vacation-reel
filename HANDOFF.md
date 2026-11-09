@@ -198,6 +198,14 @@ debug         Order section → "Download debug report" (src/debug/report.ts): H
 open          group6 test: MediaPipe-on-crop blink .49–.65 on smiling faces → "3 eyes closed" (check against Krish's report before tuning maxBlink)
 ```
 
+## 7k. iPhone round 2 (Krish: tick dead with many photos; 40 worked; scene finder "Out of memory"; wants no cap)
+```
+scenes        iPhone OOM (CLIP 89 MB + people models at once). Phones (touch + mobile UA/iPad) now run scenes AFTER people (vision worker terminated); desktops unchanged (parallel). ORT sessions (CLIP, SFace): enableCpuMemArena/enableMemPattern false. Scene error matching /memory|backend/ → one retry after 1.5 s
+length        Order section "Length": 30 s (default, ends with chorus) / 60 / 90 / All the best (180 s). LENGTHS in types.ts sets maxSeconds + bitrate (10/8/6/5 Mbps). musicTimeline: > 31 s = keep going past the chorus (no section cap; tries longest phrase-aligned total first); seconds() caps by what's left of the song from the start beat (−0.5 s) so the music never runs out. Short songs: quicker pace instead of running past the end. "All": every candidate that survives dedupe (chooseReel returns all when they fit)
+iOS picker    accept = image/heic,image/heif,image/jpeg,image/png,image/webp on iOS (asks for originals; "image/*" makes iOS convert each photo to JPEG first, which silently fails on big selections). Button under the drop zone toggles "compatible mode" (image/*), remembered in localStorage. NOT verified on device
+test          mix album + "All the best": 50 → 16 photos (synthetic scenes look alike to CLIP at .86); watch this on real albums via the debug report
+```
+
 ## 7f. Milestone 6 scope — fun modes (plan)
 Funny (jawOpen/mouthPucker/cheekPuff/eyeWide*/browInnerUp high; wink OK, half-closed both = blink), Laugh (eyes closed + big smile + open jaw), Scenic from behind (shoulders, no nose/eyes; judge scenery sharpness + framing, people small), Jump/arms up (wrists above head; highest body frame in burst). Intentional vs accidental: shared or held deviations intentional; one person in one frame accidental. A burst can yield several keepers (one per mode). Mix ~1 fun per 4–5 classic, spread out (M7 sequencing).
 

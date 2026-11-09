@@ -29,7 +29,7 @@ import { chooseReel } from './selection/reel';
 import { chapters } from './analysis/chapters';
 import { scorePhotos, type PhotoScore } from './analysis/scoring';
 import { centroid, clusterPeople, findMe, photosWithMe, type FaceRef, type Person } from './analysis/friends';
-import { DEFAULT_SETTINGS, SHAPE_SIZE, type Caption, type Clip, type Photo, type ReelStyle, type ReelSettings, type Shape } from './types';
+import { DEFAULT_SETTINGS, LENGTHS, SHAPE_SIZE, type ReelLength, type Caption, type Clip, type Photo, type ReelStyle, type ReelSettings, type Shape } from './types';
 import { megabytes, shotTime, shotTimeFull, timecode } from './ui/format';
 
 let settings: ReelSettings = { ...DEFAULT_SETTINGS };
@@ -151,8 +151,10 @@ async function addFiles(list: FileList | File[], fromDrive: { skipped: { name: s
     showSkipped(skipped);
     clearResult();
     renderGrid();
-    // One heavy download at a time (phones choke on both at once), but run the
-    // two finders side by side: scenes start once the people models are in.
+    // One heavy download at a time. Desktops run the two finders side by side
+    // (scenes start once the people models are in); phones run them one after
+    // the other, because both models together don't fit in a phone browser's
+    // memory (iPhone: "RangeError: Out of memory").
     let scenesStarted = false;
     const scenes = () => {
       if (!scenesStarted) {
@@ -160,7 +162,7 @@ async function addFiles(list: FileList | File[], fromDrive: { skipped: { name: s
         startScenes();
       }
     };
-    startPeople(scenes).finally(scenes);
+    startPeople(isPhone() ? undefined : scenes).finally(scenes);
   } catch (err) {
     el.importStatus.textContent = `Could not read photos: ${(err as Error).message}`;
   } finally {
@@ -271,11 +273,39 @@ function showSkipped(skipped: { name: string; reason: string }[]) {
   el.skipped.hidden = skipped.length === 0;
 }
 
-// iPhone/iPad: a plain "image/*" filter. File extensions in the filter (".heic")
-// can leave iOS's photo picker unable to confirm the selection. iOS hands over
-// HEIC or JPEG either way, and both are read.
+// iPhone/iPad: listing HEIC by type lets iOS hand over the originals as they are;
+// with a plain "image/*" it converts every photo to JPEG first, which is slow and
+// gives up silently on big selections (the tick does nothing). "Compatible mode"
+// (remembered on this device) goes back to plain "image/*" in case a phone dislikes the list.
 const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-if (isIOS) el.fileInput.accept = 'image/*';
+const IOS_ORIGINALS = 'image/heic,image/heif,image/jpeg,image/png,image/webp';
+const compatKey = 'vacation-reel.ios-compatible';
+const iosCompatible = () => {
+  try {
+    return localStorage.getItem(compatKey) === '1';
+  } catch {
+    return false;
+  }
+};
+const iosToggle = document.getElementById('ios-picker') as HTMLButtonElement;
+function applyIOSPicker() {
+  el.fileInput.accept = iosCompatible() ? 'image/*' : IOS_ORIGINALS;
+  iosToggle.textContent = iosCompatible()
+    ? 'Compatible mode is on (iPhone converts photos first: pick 30–40 at a time). Turn off'
+    : "iPhone: if the tick doesn't work after choosing, try compatible mode";
+}
+if (isIOS) {
+  iosToggle.hidden = false;
+  applyIOSPicker();
+  iosToggle.addEventListener('click', () => {
+    try {
+      localStorage.setItem(compatKey, iosCompatible() ? '0' : '1');
+    } catch {
+      /* private mode: stays as is */
+    }
+    applyIOSPicker();
+  });
+}
 
 el.fileInput.addEventListener('change', () => {
   if (el.fileInput.files) addFiles(el.fileInput.files);
@@ -386,7 +416,11 @@ function startPeople(onReady: () => void = () => {}): Promise<void> {
 
 let sceneJob: SceneJob | null = null;
 
-function startScenes() {
+function isPhone(): boolean {
+  return navigator.maxTouchPoints > 0 && (/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) || navigator.platform === 'MacIntel');
+}
+
+function startScenes(retry = true) {
   if (!SCENES_ENABLED) return;
   sceneJob?.cancel();
   const byId = new Map(photos.map((p) => [p.id, p]));
@@ -409,6 +443,12 @@ function startScenes() {
   void job.done.then(({ failed, error }) => {
     if (sceneJob !== job) return;
     sceneJob = null;
+    // Out of memory while something else was loaded: one more try, a moment later.
+    if (error && retry && /memory|backend/i.test(error)) {
+      el.sceneStatus.textContent = 'Scene finder ran out of memory; trying again…';
+      setTimeout(() => startScenes(false), 1500);
+      return;
+    }
     const secs = ((performance.now() - t0) / 1000).toFixed(1);
     const counts = new Map<string, number>();
     for (const p of photos) if (p.scene) counts.set(SCENE_LABEL[p.scene.label], (counts.get(SCENE_LABEL[p.scene.label]) ?? 0) + 1);
@@ -552,6 +592,20 @@ function setShape(shape: Shape) {
   clearResult();
   if (analysis) renderGrid();
 }
+// Reel length: 30 s (ends with the chorus), 60/90 s, or every good photo (up to 3 min).
+function setLength(len: ReelLength) {
+  settings = { ...settings, ...LENGTHS[len] };
+  el.spec.textContent = `${settings.width}×${settings.height} · ${settings.fps} fps · H.264 MP4 · ${settings.minSeconds}–${settings.maxSeconds} s`;
+  clearResult();
+  if (analysis) {
+    updateSongParts(currentPlan());
+    renderGrid();
+  }
+}
+document.querySelectorAll<HTMLInputElement>('input[name="length"]').forEach((r) =>
+  r.addEventListener('change', () => r.checked && setLength(r.value as ReelLength)),
+);
+
 document.querySelectorAll<HTMLInputElement>('input[name="shape"]').forEach((r) =>
   r.addEventListener('change', () => r.checked && setShape(r.value as Shape)),
 );
