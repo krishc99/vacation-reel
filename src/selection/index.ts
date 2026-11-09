@@ -300,10 +300,29 @@ function timeBoost(a: Photo, b: Photo): number {
   return dt <= TIME_BOOST.closeSec ? TIME_BOOST.close : TIME_BOOST.near;
 }
 
+// Similarities are looked up thousands of times per plan ("All the best" with
+// 150+ photos made the page stall): cache per pair of embeddings.
+const simCache = new WeakMap<number[], WeakMap<number[], number>>();
+
 /** CLIP image similarity (or, without CLIP, the picture fingerprint). */
 export function imageSim(a: Photo, b: Photo): number {
   const x = a.scene?.embedding;
   const y = b.scene?.embedding;
+  if (x && y && x.length === y.length) {
+    const row = (k: number[]) => {
+      let r = simCache.get(k);
+      if (!r) simCache.set(k, (r = new WeakMap()));
+      return r;
+    };
+    let v = row(x).get(y);
+    if (v === undefined) {
+      v = 0;
+      for (let i = 0; i < x.length; i++) v += x[i] * y[i];
+      row(x).set(y, v);
+      row(y).set(x, v);
+    }
+    return v;
+  }
   if (!x || !y || x.length !== y.length) {
     // No scene check for one of them (yet): fall back to the picture fingerprint, so
     // the same shot twice still counts as a repeat.

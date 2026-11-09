@@ -85,7 +85,10 @@ function pickChapter(
   const shown = new Map<string, number>();
   for (const p of chosen) for (const f of who.friends(p)) shown.set(f, (shown.get(f) ?? 0) + 1);
   let establishing = false;
-  const simTo = (p: Photo) => Math.max(0, ...[...chosen, ...out].map((q) => clipSim(p, q)));
+  // Closest likeness of each candidate to anything picked so far, kept up to date
+  // as picks are added (recomputing it every step made long reels stall).
+  const near = new Map<Photo, number>(pool.map((p) => [p, Math.max(0, ...chosen.map((q) => clipSim(p, q)))]));
+  const simTo = (p: Photo) => near.get(p) ?? 0;
   while (out.length < slots && pool.length) {
     // A near-repeat of something already picked doesn't count as "people still to show".
     const peopleLeft = pool.some((p) => isPeoplePhoto(p, who) && simTo(p) < SIMILAR);
@@ -116,6 +119,7 @@ function pickChapter(
     }
     if (best < 0) break;
     const [p] = pool.splice(best, 1);
+    for (const q of pool) near.set(q, Math.max(near.get(q) ?? 0, clipSim(q, p)));
     if (!isPeoplePhoto(p, who)) {
       establishing = true;
       scenery.used++;

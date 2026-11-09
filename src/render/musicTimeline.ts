@@ -185,19 +185,30 @@ export function planMusicTimeline(photoIds: string[], a: BeatAnalysis, s: ReelSe
     const t = targetSpan(a, s, part, n);
     if (t) ({ highlight: highlightBeat, start, lead, section } = t);
   }
-  // Long reels: if the song would run out after the chorus, start earlier (on a
-  // downbeat) so the music covers the whole reel; the chorus then lands mid-reel.
-  if (long) {
-    const want = sum(layout(n, preferredK(P), lead)) * P;
-    const latest = a.duration - 0.5 - Math.min(want, s.maxSeconds);
-    if (a.beats.length && beatAt(a, start) > latest) {
-      let b = start;
-      while (b - 4 >= first && beatAt(a, b) > latest) b -= 4;
-      if (b !== start) {
+  // Long reels: if the song would run out after the chosen chorus, start from an
+  // earlier strong part instead (with the usual lead-in), so the music covers the
+  // reel and the start sits on a clear beat. Krish: starting in the soft intro of
+  // "Can't Hold Us" was off-beat from the first cut; 30 s (chorus start) was fine.
+  if (long && a.beats.length) {
+    const want = Math.min(sum(layout(n, preferredK(P), lead)) * P, s.maxSeconds);
+    const latest = a.duration - 0.5 - want;
+    if (beatAt(a, start) > latest) {
+      const L = leadInBeats(P);
+      const earlier = songParts(a, Math.min(n, 40), s)
+        .map((p) => ({ hl: p.beat, st: Math.max(first, p.beat - L) }))
+        .filter((c) => beatAt(a, c.st) <= latest);
+      if (earlier.length) {
+        // The best-ranked part that still leaves room for the whole reel.
+        ({ hl: highlightBeat, st: start } = earlier[0]);
+        lead = highlightBeat! - start;
+      } else {
+        // Nothing strong early enough: back off in whole bars.
+        let b = start;
+        while (b - 4 >= first && beatAt(a, b) > latest) b -= 4;
         start = b;
         lead = 0;
-        section = null;
       }
+      section = null;
     }
   }
   const maxSec = seconds(a, s, start);

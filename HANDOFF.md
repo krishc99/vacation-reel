@@ -230,6 +230,14 @@ fixes         scenes for ALL photos (alternates too). Score uses absolute q (Pho
 open          "doesn't sync well" on All the best: asked Krish whether off from the start or drifting (no copy of the song here)
 ```
 
+## 7o. Photo craft, long-reel sync, speed (Krish: "focus on photography skill"; All the best off-beat from the start, 30 s fine; lag on All the best; faster finders)
+```
+craft         Face.light (mean brightness of the face crop centre, vision worker). scoring C = aesthetic − cut + faceLighting (−.6…+.6; good .45–.65, bigger faces weigh more). Weights Q .15 F .25 C .20 M .40
+sync          Long reels whose chorus is too late: start from the best-ranked EARLIER song part (songParts) with the normal lead-in, instead of backing off bars into the intro (soft intros = unreliable beats); bar back-off only if no part fits
+lag           imageSim cached per embedding pair (WeakMap); pickChapter keeps each candidate's nearest-pick likeness incrementally. Bench 280 photos → 150: 588 → 111 ms
+speed         src/analysis/pool.ts runPool: N copies of a model worker on one queue; first downloads, the rest start after its 'ready' (browser cache). modelWorkers(): phones 1; computers min(by memory: people 3 / scenes 2 at ≥ 8 GB, 2 at ≥ 4 GB; by cores: floor((cores−2)/2)). findPeople/findScenes use it. Sandbox has 2 cores → no gain measurable here
+```
+
 ## 7f. Milestone 6 scope — fun modes (plan)
 Funny (jawOpen/mouthPucker/cheekPuff/eyeWide*/browInnerUp high; wink OK, half-closed both = blink), Laugh (eyes closed + big smile + open jaw), Scenic from behind (shoulders, no nose/eyes; judge scenery sharpness + framing, people small), Jump/arms up (wrists above head; highest body frame in burst). Intentional vs accidental: shared or held deviations intentional; one person in one frame accidental. A burst can yield several keepers (one per mode). Mix ~1 fun per 4–5 classic, spread out (M7 sequencing).
 

@@ -1,6 +1,7 @@
 import type { Photo, VisionRequest, VisionResponse } from '../types';
 import VisionWorker from '../workers/vision.worker?worker';
 import type { People } from './people';
+import { modelWorkers, runPool } from './pool';
 
 export interface VisionJob {
   done: Promise<{ failed: number; error: string | null; warnings: string[] }>;
@@ -8,9 +9,9 @@ export interface VisionJob {
 }
 
 /**
- * Finds faces and bodies for photos that don't have them yet, one at a time in
- * a single worker (the models are ~10 MB; one copy in memory). Results stream
- * back through onPeople so the grid can update as it goes.
+ * Finds faces and bodies for photos that don't have them yet. Phones run one
+ * worker; computers with memory to spare run up to 3 copies side by side.
+ * Results stream back through onPeople so the grid can update as it goes.
  */
 export function findPeople(
   photos: Photo[],
@@ -19,62 +20,30 @@ export function findPeople(
   onReady: () => void = () => {},
 ): VisionJob {
   const todo = photos.filter((p) => !p.people);
-  const worker = new VisionWorker();
-  let cancelled = false;
   let warnings: string[] = [];
-  type Done = { failed: number; error: string | null; warnings: string[] };
-  let finish: (r: Done) => void = () => {};
-  const done = new Promise<Done>((r) => (finish = r));
-  let i = 0;
-  let failed = 0;
-
-  const next = () => {
-    if (cancelled) return;
-    if (i >= todo.length) {
-      worker.terminate();
-      return finish({ failed, error: null, warnings });
-    }
-    const p = todo[i];
-    const req: VisionRequest = { type: 'photo', id: p.id, detail: p.detail, master: p.master, noise: p.stats.noise };
-    worker.postMessage(req);
-  };
-
-  worker.onmessage = (e: MessageEvent<VisionResponse>) => {
-    const m = e.data;
-    if (m.type === 'ready') {
-      warnings = m.warnings;
-      onReady();
-      return next();
-    }
-    if (m.type === 'fatal') {
-      worker.terminate();
-      return finish({ failed: todo.length, error: m.message, warnings });
-    }
-    if (m.type === 'people') onPeople(m.id, m.people);
-    else failed++;
-    onProgress(++i, todo.length);
-    next();
-  };
-  worker.onerror = (e) => {
-    e.preventDefault();
-    worker.terminate();
-    finish({ failed: todo.length - i, error: e.message || 'people finder stopped', warnings });
-  };
-
-  if (todo.length === 0) {
-    worker.terminate();
-    onReady();
-    finish({ failed: 0, error: null, warnings: [] });
-  } else {
-    const init: VisionRequest = { type: 'init', base: new URL(import.meta.env.BASE_URL, location.href).href };
-    worker.postMessage(init);
-  }
-  return {
-    done,
-    cancel() {
-      cancelled = true;
-      worker.terminate();
-      finish({ failed: 0, error: null, warnings });
+  if (!todo.length) onReady();
+  const pool = runPool<VisionRequest, VisionResponse>(
+    () => new VisionWorker(),
+    modelWorkers('people'),
+    todo.length,
+    {
+      init: { type: 'init', base: new URL(import.meta.env.BASE_URL, location.href).href },
+      request: (i) => {
+        const p = todo[i];
+        return { type: 'photo', id: p.id, detail: p.detail, master: p.master, noise: p.stats.noise };
+      },
+      kind: (m) => (m.type === 'ready' ? 'ready' : m.type === 'fatal' ? 'fatal' : m.type === 'people' ? 'ok' : 'failed'),
+      fatalText: (m) => (m.type === 'fatal' ? m.message : 'people finder stopped'),
     },
+    (m) => m.type === 'people' && onPeople(m.id, m.people),
+    onProgress,
+    (m) => {
+      if (m.type === 'ready') warnings = m.warnings;
+      onReady();
+    },
+  );
+  return {
+    done: pool.done.then((r) => ({ ...r, warnings })),
+    cancel: pool.cancel,
   };
 }

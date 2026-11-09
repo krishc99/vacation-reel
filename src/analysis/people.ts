@@ -25,6 +25,8 @@ export interface Face {
   lookDown?: number;
   /** Sharpness of this face alone (content-independent ratio on a 96 px crop of the big copy). */
   sharpness?: number;
+  /** Brightness of the face 0..1 (centre of the face crop): dark = backlit / in shadow. */
+  light?: number;
   /** Hidden: a hand over it (body landmarks), or a big face the expression model can't read. */
   covered?: boolean;
 }

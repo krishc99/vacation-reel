@@ -352,6 +352,15 @@ function faceSharpnessOf(master: ImageBitmap, f: Face, noise: number): number {
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(master, cx - side / 2, cy - side / 2, side, side, 0, 0, 96, 96);
   const gray = toGray(ctx.getImageData(0, 0, 96, 96).data, 96, 96);
+  // Lighting on the face: mean brightness of the middle of the crop (cheeks, nose, eyes).
+  let sum = 0;
+  let n = 0;
+  for (let y = 30; y < 66; y++)
+    for (let x = 30; x < 66; x++) {
+      sum += gray.data[y * 96 + x];
+      n++;
+    }
+  (f as Face).light = Math.round((sum / n / 255) * 100) / 100;
   // Noise shrinks with the downscale; only correct when the crop isn't upsampled.
   return subjectSharpness(gray, undefined, side >= 96 ? noise * (96 / side) : noise);
 }

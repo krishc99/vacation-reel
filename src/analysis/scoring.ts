@@ -12,8 +12,10 @@ import labels from './sceneLabels.json';
  * feedback (people over food/scenery; blurry shots are already gated out; the
  * aesthetic model rates food photos very highly — coffee 7.1 vs group 5.7):
  * more weight on the moment (who is in it, highlights), less on looks/quality.
+ * Later (Krish: "focus on photography skill: angle, lighting"): C .15 → .20, M .45 → .40,
+ * and C now includes how well the faces are lit.
  */
-export const SCORE_WEIGHTS = { Q: 0.15, F: 0.25, C: 0.15, M: 0.45 };
+export const SCORE_WEIGHTS = { Q: 0.15, F: 0.25, C: 0.2, M: 0.4 };
 
 /**
  * Once you've marked yourself: photos with you get a lift; solo photos of
@@ -85,6 +87,24 @@ function percentiles(values: number[]): number[] {
   return out;
 }
 
+/**
+ * Face lighting bonus, about −0.6…+0.6 (the aesthetic score spans ~4–8): faces
+ * around mid-bright (0.45–0.65) are well lit; the bigger faces count more.
+ */
+export function faceLighting(p: Photo): number {
+  const faces = (p.people?.faces ?? []).filter((f) => f.light !== undefined && f.box.h >= 0.03);
+  if (!faces.length) return 0;
+  let w = 0;
+  let sum = 0;
+  for (const f of faces) {
+    const l = f.light!;
+    const good = l < 0.45 ? clamp01((l - 0.15) / 0.3) : l > 0.65 ? clamp01((0.92 - l) / 0.27) : 1;
+    sum += f.box.h * good;
+    w += f.box.h;
+  }
+  return 1.2 * (sum / w) - 0.6;
+}
+
 const SCENIC = ['scenery', 'sunset', 'landmark', 'city', 'activity', 'nightlife'] as const;
 
 export interface ScoreContext {
@@ -111,10 +131,12 @@ export function scorePhotos(photos: Photo[], ctx: ScoreContext, w = SCORE_WEIGHT
     } else if (p.scene) {
       F = 0.5 * clamp01(SCENIC.reduce((s, k) => s + (p.scene!.probs[k] ?? 0), 0));
     } else F = 0.25;
-    // C: how good it looks (LAION aesthetic on CLIP), minus people cut off by the frame.
+    // C: how good it looks as a photograph: LAION aesthetic on CLIP (composition,
+    // colour, light, angle as people rate them), how well the faces are lit (dark =
+    // backlit or in shadow, washed out = blown), minus people cut off by the frame.
     const aes = aestheticScore(p.scene?.embedding);
     const cut = v?.faceRank?.issues.some((i) => i.includes('cut off')) ? 0.5 : 0;
-    const C = (aes ?? 5) - cut;
+    const C = (aes ?? 5) - cut + faceLighting(p);
     // M: the moment. Friends present (you count extra), burst density, highlight, new place.
     const friends = ctx.who.known ? ctx.who.friends(p) : [];
     const nFriends = ctx.who.known ? friends.length : (p.people?.count ?? 0);
