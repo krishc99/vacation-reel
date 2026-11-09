@@ -151,7 +151,7 @@ describe('photos without a camera date', () => {
     const u1 = mk('u1', 2.5, 'file');
     const u2 = mk('u2', 2.6, 'file');
     const scores = new Map(
-      [a, b, c, d, u1, u2].map((p, i) => [p.id, { Q: 0.5, F: 0.5, C: 0.5, M: i === 3 ? 1 : 0.2, score: p.id === 'u1' ? 0.9 : p.id === 'a' ? 0.95 : 0.4, aesthetic: null, highlight: null }]),
+      [a, b, c, d, u1, u2].map((p, i) => [p.id, { Q: 0.5, F: 0.5, C: 0.5, M: i === 3 ? 1 : 0.2, score: p.id === 'u1' ? 0.9 : p.id === 'a' ? 0.95 : 0.4, aesthetic: null, highlight: null, q: 1 }]),
     );
     const order = sequence([a, b, c, d, u1, u2], [[a, b, u1, u2, c, d]], scores, { friends: () => [], known: false }).map((p) => p.id);
     expect(order[0]).toBe('a');

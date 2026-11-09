@@ -223,6 +223,13 @@ check         Krish's carousel set (#7,#12–16, CLIP .84–.95, within 70 s) an
 tools         scratchpad/rep/lib.py: load(report) → (data, thumbs by "#n"); sheet(thumbs, [(n, label)], path) contact sheet
 ```
 
+## 7n. Report 2 (All the best + "Can't Hold Us"; "no group photos"; only 33 photos; "doesn't sync well")
+```
+findings      15 keepers had NO CLIP (scenes ran only on burst keepers; keepers change after faces are checked) → repeats invisible (#23 + #32 same street both in). Q percentile on saturated q (most .93–1.0) sank good shots (q .93 → Q .09): the 6-person sets #262–264, #178–181 lost. Dedupe refill took scenery once same-minute people shots were repeats. Undated low-score photos (.22–.51) opened/closed the reel. "All": chorus late in a 4-min song → seconds() capped at what's left → 33 photos
+fixes         scenes for ALL photos (alternates too). Score uses absolute q (PhotoScore.q added); dedupe "more people wins unless |q gap| > .15 absolute". M friends term n/5 (was n/4). dedupe refill: people first; scenery only while < 10% of reel (or album has no people) else slot left empty. chooseReel drops undated photos scoring < UNDATED_MIN_SCORE .7. Long reels: count from the first downbeat; plan starts earlier (downbeat-aligned, lead 0) when the song would end before the reel
+open          "doesn't sync well" on All the best: asked Krish whether off from the start or drifting (no copy of the song here)
+```
+
 ## 7f. Milestone 6 scope — fun modes (plan)
 Funny (jawOpen/mouthPucker/cheekPuff/eyeWide*/browInnerUp high; wink OK, half-closed both = blink), Laugh (eyes closed + big smile + open jaw), Scenic from behind (shoulders, no nose/eyes; judge scenery sharpness + framing, people small), Jump/arms up (wrists above head; highest body frame in burst). Intentional vs accidental: shared or held deviations intentional; one person in one frame accidental. A burst can yield several keepers (one per mode). Mix ~1 fun per 4–5 classic, spread out (M7 sequencing).
 

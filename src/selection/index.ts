@@ -164,7 +164,7 @@ export function dedupeReel(
     const na = who.known ? who.friends(a).length : (a.people?.count ?? 0);
     const nb = who.known ? who.friends(b).length : (b.people?.count ?? 0);
     let [keep, drop] =
-      na !== nb && Math.abs(qa - qb) <= 0.25
+      na !== nb && Math.abs(qa - qb) <= 0.15
         ? na > nb
           ? [a, b]
           : [b, a]
@@ -187,10 +187,21 @@ export function dedupeReel(
       [keep, drop] = [drop, keep];
     }
     picks.delete(drop);
-    const wantPeople = isPeoplePhoto(drop, who);
-    const rank = (p: Photo) => (isPeoplePhoto(p, who) === wantPeople ? 10 : 0) + score(p);
+    // Refill: people photos first; scenery only while it's under a tenth of the reel
+    // (otherwise leave the slot empty: the other photos get a little longer).
+    const rank = (p: Photo) => (isPeoplePhoto(p, who) ? 10 : 0) + score(p);
+    const sceneryNow = [...picks].filter((p) => !isPeoplePhoto(p, who)).length;
+    const sceneryOk = sceneryNow < Math.max(1, Math.floor((picks.size + 1) * 0.1)) || !all.some((p) => isPeoplePhoto(p, who));
     const incoming = all
-      .filter((p) => !picks.has(p) && p !== drop && !isSoloOther(p, who) && ![...picks].some((q) => clipSim(p, q) >= SIMILAR) && clipSim(p, drop) < SIMILAR)
+      .filter(
+        (p) =>
+          !picks.has(p) &&
+          p !== drop &&
+          !isSoloOther(p, who) &&
+          (sceneryOk || isPeoplePhoto(p, who)) &&
+          ![...picks].some((q) => clipSim(p, q) >= SIMILAR) &&
+          clipSim(p, drop) < SIMILAR,
+      )
       .sort((x, y) => rank(y) - rank(x))[0];
     if (incoming) picks.add(incoming);
     swaps++;

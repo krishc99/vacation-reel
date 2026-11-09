@@ -444,9 +444,11 @@ function startScenes(retry = true) {
   const byId = new Map(photos.map((p) => [p.id, p]));
   const t0 = performance.now();
   el.sceneStatus.textContent = 'Getting the scene finder ready…';
-  // Burst alternates can't be picked (unless swapped in by hand), so they don't need a scene.
+  // Every photo gets a scene, alternates too: which frame of a burst is the keeper can
+  // change once faces are checked, and a keeper without a scene can't be checked for
+  // repeats (Krish's report: 15 of them, two of the same street both made the reel).
   const job = findScenes(
-    photos.filter((p) => analysis?.verdicts.get(p.id)?.status !== 'alternate'),
+    photos,
     (id, scene) => {
       const p = byId.get(id);
       if (p) {

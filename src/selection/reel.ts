@@ -130,14 +130,20 @@ function pickChapter(
   return out;
 }
 
-export function chooseReel(candidates: Photo[], max: number, scores: Map<string, PhotoScore>, who: Who): ReelPlan {
+/** Photos without a camera date only make the reel if they're this strong (they open or close the story). */
+export const UNDATED_MIN_SCORE = 0.7;
+
+export function chooseReel(all: Photo[], max: number, scores: Map<string, PhotoScore>, who: Who): ReelPlan {
   const score = (p: Photo) => scores.get(p.id)?.score ?? 0;
+  const dated = all.filter((p) => p.timeSource === 'exif' || score(p) >= UNDATED_MIN_SCORE);
+  // Albums with no camera dates at all keep everything.
+  const candidates = dated.length >= Math.min(all.length, 3) ? dated : all;
   const byId = new Map(candidates.map((p) => [p.id, p]));
   const groups = chapters(candidates).map((ids) => ids.map((id) => byId.get(id)!));
   if (candidates.length <= max) {
     // Everything fits, but still at most one solo photo of someone else.
     const all = new Set(candidates);
-    const trimmed = limitSoloOthers(candidates, all, score, who) + dedupeReel(candidates, all, score, (p) => scores.get(p.id)?.Q ?? 0.5, who);
+    const trimmed = limitSoloOthers(candidates, all, score, who) + dedupeReel(candidates, all, score, (p) => scores.get(p.id)?.q ?? 0.5, who);
     if (trimmed) {
       const kept = candidates.filter((p) => all.has(p));
       return { picks: sequence(kept, groups, scores, who), droppedForLength: 0, chapters: groups.length, friendSwaps: trimmed };
@@ -154,11 +160,11 @@ export function chooseReel(candidates: Photo[], max: number, scores: Map<string,
     coverFriends(candidates, set, score, who) +
     ensureMe(candidates, set, score, who) +
     limitSoloOthers(candidates, set, score, who) +
-    dedupeReel(candidates, set, score, (p) => scores.get(p.id)?.Q ?? 0.5, who);
+    dedupeReel(candidates, set, score, (p) => scores.get(p.id)?.q ?? 0.5, who);
   const picked = candidates.filter((p) => set.has(p));
   return {
     picks: sequence(picked, groups, scores, who),
-    droppedForLength: candidates.length - picked.length,
+    droppedForLength: all.length - picked.length,
     chapters: groups.length,
     friendSwaps,
   };

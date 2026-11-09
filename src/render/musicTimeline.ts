@@ -88,7 +88,8 @@ export function maxPhotosForMusic(a: BeatAnalysis, s: ReelSettings, mode: SongSt
   const long = s.maxSeconds > MUSIC_DEFAULTS.chorusOnlyUpTo;
   const target = mode === 'best' ? targetSpan(a, s, part, 15) : null;
   const first = a.downbeatPhase < a.beats.length ? a.downbeatPhase : 0;
-  const maxSec = seconds(a, s, target ? target.start : first);
+  // Long reels may start earlier in the song so it lasts (see planMusicTimeline).
+  const maxSec = seconds(a, s, long ? first : target ? target.start : first);
   const budget = Math.floor(maxSec / P + 1e-6);
   let n = long ? Math.ceil(maxSec / (k * P)) + 2 : MUSIC_DEFAULTS.maxPhotos;
   if (mode === 'best' && !long) {
@@ -183,6 +184,21 @@ export function planMusicTimeline(photoIds: string[], a: BeatAnalysis, s: ReelSe
   if (mode === 'best') {
     const t = targetSpan(a, s, part, n);
     if (t) ({ highlight: highlightBeat, start, lead, section } = t);
+  }
+  // Long reels: if the song would run out after the chorus, start earlier (on a
+  // downbeat) so the music covers the whole reel; the chorus then lands mid-reel.
+  if (long) {
+    const want = sum(layout(n, preferredK(P), lead)) * P;
+    const latest = a.duration - 0.5 - Math.min(want, s.maxSeconds);
+    if (a.beats.length && beatAt(a, start) > latest) {
+      let b = start;
+      while (b - 4 >= first && beatAt(a, b) > latest) b -= 4;
+      if (b !== start) {
+        start = b;
+        lead = 0;
+        section = null;
+      }
+    }
   }
   const maxSec = seconds(a, s, start);
   const budget = Math.floor(maxSec / P + 1e-6);

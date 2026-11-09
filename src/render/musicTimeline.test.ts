@@ -88,3 +88,18 @@ describe('long reels', () => {
     }
   });
 });
+
+describe('long reel with a late chorus', () => {
+  it('starts earlier in the song so the music lasts the whole reel', async () => {
+    const { LENGTHS } = await import('../types');
+    // 4-minute song, loud part (chorus) near the end.
+    const a = grid(146, 240, 1, 200, 230);
+    const s = { ...DEFAULT_SETTINGS, ...LENGTHS.all };
+    const n = maxPhotosForMusic(a, s, 'best');
+    expect(n).toBeGreaterThan(100);
+    const plan = planMusicTimeline(ids(n), a, s, 'best');
+    expect(plan.duration).toBeGreaterThan(120);
+    expect(plan.audioStart + plan.duration).toBeLessThanOrEqual(a.duration);
+    expect(a.beats.indexOf(plan.audioStart) % 4).toBe(a.downbeatPhase);
+  });
+});

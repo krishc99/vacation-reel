@@ -34,6 +34,8 @@ export interface PhotoScore {
   score: number;
   /** Raw aesthetic (LAION, ~1–10) for tooltips. */
   aesthetic: number | null;
+  /** Absolute quality 0..1 (sharpness, exposure, noise), for comparing two near-identical shots. */
+  q: number;
   /** Which highlight prompt matched best, if strongly. */
   highlight: string | null;
 }
@@ -119,14 +121,18 @@ export function scorePhotos(photos: Photo[], ctx: ScoreContext, w = SCORE_WEIGHT
     const me = ctx.who.me && friends.includes(ctx.who.me) ? 1 : 0;
     const hl = highlightOf(p.scene?.embedding);
     const M =
-      0.45 * clamp01(nFriends / 4) +
+      // Bigger groups count more, up to 5 people (Krish: prefer the photos with more of us together).
+      0.45 * clamp01(nFriends / 5) +
       0.15 * me +
       0.15 * (Math.log(1 + ctx.burstSize(p)) / Math.log(1 + maxBurst)) +
       0.15 * hl.strength +
       0.1 * (ctx.firstOfChapter(p) ? 1 : 0);
     return { Q, F, C, M, aes, hl: hl.name };
   });
-  const [pQ, pF, pC, pM] = (['Q', 'F', 'C', 'M'] as const).map((k) => percentiles(raw.map((r) => r[k])));
+  const [, pF, pC, pM] = (['Q', 'F', 'C', 'M'] as const).map((k) => percentiles(raw.map((r) => r[k])));
+  // Quality stays absolute: most usable photos score ~0.93–1.0, and ranking those
+  // tiny differences (Krish's report: q .93 → bottom 9%) unfairly sank good group shots.
+  const pQ = raw.map((r) => r.Q);
   const out = new Map<string, PhotoScore>();
   const me = ctx.who.me;
   photos.forEach((p, i) => {
@@ -150,6 +156,7 @@ export function scorePhotos(photos: Photo[], ctx: ScoreContext, w = SCORE_WEIGHT
       M: pM[i],
       score: w.Q * pQ[i] + w.F * pF[i] + w.C * pC[i] + w.M * pM[i] + adj,
       aesthetic: raw[i].aes,
+      q: raw[i].Q,
       highlight: raw[i].hl,
     });
   });
