@@ -35,10 +35,17 @@ export const NO_WHO: Who = { friends: () => [], known: false };
 const unidentifiedSubject = (p: Photo) =>
   (p.people?.faces ?? []).some((f) => !f.embedding && f.box.h >= 0.07) || (p.people?.bodies ?? []).some((b) => b.box.h >= 0.45);
 
+/**
+ * Two or more faces at least 5% of the photo tall (posing, not passing by) = a group photo, even if none of them was
+ * recognised as a friend (recognition can split one person into several
+ * "one-off" faces, which used to turn group photos into scenery).
+ */
+const groupShot = (p: Photo) => (p.people?.faces ?? []).filter((f) => f.box.h >= 0.05 && !f.covered).length >= 2;
+
 export function isPeoplePhoto(p: Photo, who: Who = NO_WHO): boolean {
   if (!p.people || p.people.count === 0) return false;
   if (!who.known) return true;
-  return who.friends(p).length > 0 || unidentifiedSubject(p);
+  return who.friends(p).length > 0 || unidentifiedSubject(p) || groupShot(p);
 }
 
 /**

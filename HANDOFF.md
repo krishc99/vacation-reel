@@ -206,6 +206,14 @@ iOS picker    accept = image/heic,image/heif,image/jpeg,image/png,image/webp on 
 test          mix album + "All the best": 50 → 16 photos (synthetic scenes look alike to CLIP at .86); watch this on real albums via the debug report
 ```
 
+## 7l. Same face in several circles; scenery over group photos (Krish, after pausing iPhone testing)
+```
+friends       clusterPeople pass 2: merge groups whose CENTROIDS have cosine ≥ mergeCentroid .42 (cannot-link kept). Manual: "Same person in two circles? Merge them" under the circles → tap both → mergePersons; merges remembered as centroid pairs for the session and re-applied after each regroup (nearestPerson ≥ .6)
+selection     isPeoplePhoto also true for a group shot: ≥ 2 uncovered faces ≥ 5% tall, recognised or not (split identities used to make group photos "one-off strangers" = scenery). Reel-wide scenery cap: REEL.sceneryShare .15 (min 1) of slots for no-people photos while people photos are left (was: one establishing shot per chapter with ≥ 3 slots, unbounded across chapters)
+ios           picker wait message: after the picker closes (focus/visibility), "Your phone is handing the photos over…" until change/cancel
+```
+Still waiting on Krish's debug report from a real album to tune SIMILAR / scoring with data.
+
 ## 7f. Milestone 6 scope — fun modes (plan)
 Funny (jawOpen/mouthPucker/cheekPuff/eyeWide*/browInnerUp high; wink OK, half-closed both = blink), Laugh (eyes closed + big smile + open jaw), Scenic from behind (shoulders, no nose/eyes; judge scenery sharpness + framing, people small), Jump/arms up (wrists above head; highest body frame in burst). Intentional vs accidental: shared or held deviations intentional; one person in one frame accidental. A burst can yield several keepers (one per mode). Mix ~1 fun per 4–5 classic, spread out (M7 sequencing).
 

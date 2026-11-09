@@ -274,3 +274,4 @@ label.btn:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; 
 .drive input { flex: 1 1 220px; min-width: 0; padding: 10px 12px; border: 1.5px solid var(--line); border-radius: 10px; background: var(--surface); color: inherit; font: inherit; }
 .debug { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-top: 16px; }
 .linkish { font-size: 0.82rem; padding: 6px 0; text-decoration: underline; background: none; border: 0; color: var(--muted); }
+.friend.is-merging .friend__btn { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 999px; }

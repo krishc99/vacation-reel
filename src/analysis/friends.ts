@@ -39,6 +39,12 @@ export const FRIEND_DEFAULTS = {
    * Strangers in the background are usually well under 5%.
    */
   bigFace: 0.07,
+  /**
+   * Second pass: groups whose average faces (centroids) are this alike are one
+   * person seen in different light/angles. Centroids are steadier than single
+   * faces, so this catches splits the first pass leaves (same face, several circles).
+   */
+  mergeCentroid: 0.42,
 };
 
 export function clusterPeople(faces: FaceRef[], o = FRIEND_DEFAULTS): Person[] {
@@ -69,6 +75,36 @@ export function clusterPeople(faces: FaceRef[], o = FRIEND_DEFAULTS): Person[] {
     const b = clusters[bj];
     a.members.push(...b.members);
     b.photos.forEach((p) => a.photos.add(p));
+    clusters.splice(bj, 1);
+  }
+  // Pass 2: merge groups by their average face (never two faces from the same photo).
+  const unit = (v: number[]) => {
+    const n = Math.hypot(...v) || 1;
+    return v.map((x) => x / n);
+  };
+  const centre = (c: C) => {
+    const m = new Array<number>(faces[c.members[0]].embedding.length).fill(0);
+    for (const i of c.members) faces[i].embedding.forEach((x, d) => (m[d] += x));
+    return unit(m);
+  };
+  for (;;) {
+    const cs = clusters.map(centre);
+    let best = o.mergeCentroid;
+    let bi = -1;
+    let bj = -1;
+    for (let i = 0; i < clusters.length; i++)
+      for (let j = i + 1; j < clusters.length; j++) {
+        if ([...clusters[i].photos].some((p) => clusters[j].photos.has(p))) continue;
+        const v = cosine(cs[i], cs[j]);
+        if (v >= best) {
+          best = v;
+          bi = i;
+          bj = j;
+        }
+      }
+    if (bi < 0) break;
+    clusters[bi].members.push(...clusters[bj].members);
+    clusters[bj].photos.forEach((p) => clusters[bi].photos.add(p));
     clusters.splice(bj, 1);
   }
   const people = clusters.map((c, k) => {
@@ -136,4 +172,25 @@ export function photosWithMe(faces: FaceRef[], me: number[] | null): Set<string>
   }
   for (const [id, s] of best) if (s >= ME_FACE_MATCH) out.add(id);
   return out;
+}
+
+/**
+ * You said two circles are the same person: fold b into a (ids stay a's).
+ * Recomputes photos, moments and friend status.
+ */
+export function mergePersons(people: Person[], aId: string, bId: string, o = FRIEND_DEFAULTS): Person[] {
+  const a = people.find((p) => p.id === aId);
+  const b = people.find((p) => p.id === bId);
+  if (!a || !b || a === b) return people;
+  const faces = [...a.faces, ...b.faces];
+  const merged: Person = {
+    id: a.id,
+    faces,
+    photoIds: [...new Set(faces.map((f) => f.photoId))],
+    moments: new Set(faces.map((f) => f.burstId)).size,
+    largest: Math.max(...faces.map((f) => f.size)),
+    friend: true,
+  };
+  merged.friend = merged.moments >= 2 || merged.largest >= o.bigFace || a.friend || b.friend;
+  return people.filter((p) => p !== b).map((p) => (p === a ? merged : p));
 }

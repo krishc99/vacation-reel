@@ -56,3 +56,24 @@ describe('clusterPeople', () => {
     expect(people.find((p) => p.photoIds.includes('y1'))!.friend).toBe(false);
   });
 });
+
+describe('one person, two circles', () => {
+  const unit = (v: number[]) => {
+    const n = Math.hypot(...v);
+    return v.map((x) => x / n);
+  };
+  it('merges groups whose average faces match, but never two faces from one photo', async () => {
+    const { clusterPeople, mergePersons } = await import('./friends');
+    // Person A seen in two lighting conditions: faces only 0.30 alike pairwise across, 0.9 within.
+    const a1 = unit([1, 0.3, 0, 0]);
+    const a2 = unit([1, -0.3, 0.2, 0]);
+    const ref = (photoId: string, e: number[]) => ({ photoId, burstId: photoId, faceIndex: 0, embedding: e, size: 0.05 });
+    const people = clusterPeople([ref('p1', a1), ref('p2', a1), ref('p3', a2), ref('p4', a2)], { sameCosine: 0.99, bigFace: 0.07, mergeCentroid: 0.42 });
+    expect(people).toHaveLength(1);
+    const apart = clusterPeople([ref('p1', a1), ref('p1', a2)], { sameCosine: 0.99, bigFace: 0.07, mergeCentroid: 0.42 });
+    expect(apart).toHaveLength(2);
+    const merged = mergePersons(apart, apart[0].id, apart[1].id);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].faces).toHaveLength(2);
+  });
+});

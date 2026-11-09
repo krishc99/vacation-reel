@@ -28,7 +28,7 @@ import { NO_WHO, type Who } from './selection';
 import { chooseReel } from './selection/reel';
 import { chapters } from './analysis/chapters';
 import { scorePhotos, type PhotoScore } from './analysis/scoring';
-import { centroid, clusterPeople, findMe, photosWithMe, type FaceRef, type Person } from './analysis/friends';
+import { centroid, clusterPeople, findMe, mergePersons, photosWithMe, type FaceRef, type Person } from './analysis/friends';
 import { DEFAULT_SETTINGS, LENGTHS, SHAPE_SIZE, type ReelLength, type Caption, type Clip, type Photo, type ReelStyle, type ReelSettings, type Shape } from './types';
 import { megabytes, shotTime, shotTimeFull, timecode } from './ui/format';
 
@@ -307,7 +307,25 @@ if (isIOS) {
   });
 }
 
+// After the picker closes, iOS still has to copy every chosen photo before the
+// page gets them (about 2 s for 40, much longer for 100+). Say so instead of
+// looking frozen.
+let picking = false;
+el.fileInput.addEventListener('click', () => (picking = true));
+const pickerClosed = () => {
+  if (!picking) return;
+  setTimeout(() => {
+    if (picking) el.importStatus.textContent = 'Your phone is handing the photos over… big selections can take a while (about 1 s per 20 photos).';
+  }, 600);
+};
+window.addEventListener('focus', pickerClosed);
+document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && pickerClosed());
+el.fileInput.addEventListener('cancel', () => {
+  picking = false;
+  el.importStatus.textContent = '';
+});
 el.fileInput.addEventListener('change', () => {
+  picking = false;
   if (el.fileInput.files) addFiles(el.fileInput.files);
   el.fileInput.value = '';
 });
@@ -478,6 +496,7 @@ function updateFriends() {
     });
   }
   persons = clusterPeople(faces);
+  applyMerges();
   meId = findMe(persons, meCentroid)?.id ?? null;
   const byPhoto = new Map<string, string[]>();
   for (const person of persons) {
@@ -525,6 +544,38 @@ function setMe(person: Person | null) {
   clearResult();
 }
 
+// "Same person in two circles": you tap both, they become one. Remembered (by
+// face fingerprint) for this session, so it survives regrouping as photos come in.
+let mergeMode = false;
+let mergeFirst: string | null = null;
+const merges: [number[], number[]][] = [];
+function nearestPerson(c: number[]): Person | null {
+  let best: Person | null = null;
+  let bestSim = 0.6;
+  for (const p of persons) {
+    const v = centroid(p);
+    const s = v.length === c.length ? v.reduce((acc, x, i) => acc + x * c[i], 0) : 0;
+    if (s > bestSim) {
+      bestSim = s;
+      best = p;
+    }
+  }
+  return best;
+}
+function applyMerges() {
+  for (const [ca, cb] of merges) {
+    const a = nearestPerson(ca);
+    const b = nearestPerson(cb);
+    if (a && b && a.id !== b.id) persons = mergePersons(persons, a.id, b.id);
+  }
+}
+const mergeBtn = document.getElementById('friend-merge') as HTMLButtonElement;
+mergeBtn.addEventListener('click', () => {
+  mergeMode = !mergeMode;
+  mergeFirst = null;
+  renderGrid();
+});
+
 function renderFriends(picks: Photo[]) {
   const shownPeople = persons.filter((p) => p.friend || p.id === meId).sort((a, b) => Number(b.id === meId) - Number(a.id === meId));
   el.friends.hidden = !who.known || shownPeople.length === 0;
@@ -544,7 +595,20 @@ function renderFriends(picks: Photo[]) {
       btn.title = isMe
         ? `You. In ${f.photoIds.length} photo${f.photoIds.length === 1 ? '' : 's'}; ${shown} in the reel. Tap to unmark.`
         : `In ${f.photoIds.length} photo${f.photoIds.length === 1 ? '' : 's'}; ${shown} in the reel. Tap if this is you.`;
-      btn.addEventListener('click', () => setMe(isMe ? null : f));
+      btn.addEventListener('click', () => {
+        if (!mergeMode) return setMe(isMe ? null : f);
+        if (!mergeFirst || mergeFirst === f.id) {
+          mergeFirst = mergeFirst === f.id ? null : f.id;
+          return renderGrid();
+        }
+        const first = persons.find((x) => x.id === mergeFirst);
+        if (first) merges.push([centroid(first), centroid(f)]);
+        mergeMode = false;
+        mergeFirst = null;
+        updateFriends();
+        clearResult();
+      });
+      if (mergeMode && mergeFirst === f.id) li.classList.add('is-merging');
       const img = document.createElement('img');
       img.alt = isMe ? 'You' : '';
       if (faceThumbs.has(f.id)) img.src = faceThumbs.get(f.id)!;
@@ -556,6 +620,12 @@ function renderFriends(picks: Photo[]) {
     }),
   );
   const friendCount = shownPeople.length - (meId ? 1 : 0);
+  mergeBtn.hidden = shownPeople.length < 2;
+  mergeBtn.textContent = mergeMode
+    ? mergeFirst
+      ? 'Now tap the other circle of the same person (or tap here to cancel)'
+      : 'Tap the first circle of the person shown twice (or tap here to cancel)'
+    : 'Same person in two circles? Merge them';
   el.friendsNote.textContent =
     (meId ? '' : 'Tap your own face to mark yourself; you\'re usually behind the camera, so the reel will make sure you\'re in it. ') +
     `${friendCount} ${friendCount === 1 ? 'person' : 'people'} recognised (in reel / in album).` +

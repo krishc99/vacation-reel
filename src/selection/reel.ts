@@ -18,6 +18,8 @@ export const REEL = {
   balance: 0.07,
   /** Food: at most this share of the reel (min 1) unless nothing else is left. */
   foodShare: 0.1,
+  /** Photos without people (scenery, landmarks, city…): at most this share of the reel while people photos are left. */
+  sceneryShare: 0.15,
   beamWidth: 12,
 };
 
@@ -69,6 +71,7 @@ function pickChapter(
   score: (p: Photo) => number,
   who: Who,
   food: { used: number; cap: number },
+  scenery: { used: number; cap: number },
 ): Photo[] {
   const out: Photo[] = [];
   const pool = [...group];
@@ -86,7 +89,7 @@ function pickChapter(
       const p = pool[i];
       const people = isPeoplePhoto(p, who);
       const scenic = ESTABLISHING.has(p.scene?.label ?? '');
-      if (!people && peopleLeft && !(scenic && slots >= 3 && !establishing)) continue;
+      if (!people && peopleLeft && !(scenic && slots >= 3 && !establishing && scenery.used < scenery.cap)) continue;
       if (isFood(p) && food.used >= food.cap && pool.some((q) => !isFood(q))) continue;
       const sim = simTo(p);
       const fresh = who.friends(p).filter((f) => !shownFriends.has(f)).length;
@@ -105,7 +108,10 @@ function pickChapter(
     }
     if (best < 0) break;
     const [p] = pool.splice(best, 1);
-    if (!isPeoplePhoto(p, who)) establishing = true;
+    if (!isPeoplePhoto(p, who)) {
+      establishing = true;
+      scenery.used++;
+    }
     if (isFood(p)) food.used++;
     who.friends(p).forEach((f) => {
       shownFriends.add(f);
@@ -132,8 +138,9 @@ export function chooseReel(candidates: Photo[], max: number, scores: Map<string,
   }
   const slots = allocate(groups, max, score);
   const food = { used: 0, cap: Math.max(1, Math.floor(max * REEL.foodShare)) };
+  const scenery = { used: 0, cap: Math.max(1, Math.floor(max * REEL.sceneryShare)) };
   const chosen: Photo[] = [];
-  groups.forEach((g, i) => chosen.push(...pickChapter(g, slots[i], chosen, score, who, food)));
+  groups.forEach((g, i) => chosen.push(...pickChapter(g, slots[i], chosen, score, who, food, scenery)));
   const set = new Set(chosen);
   const friendSwaps =
     coverFriends(candidates, set, score, who) +
