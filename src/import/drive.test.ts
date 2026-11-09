@@ -24,13 +24,13 @@ describe('Google Drive links', () => {
         return json({ files: [{ id: 'b', name: 'IMG_1.HEIC', mimeType: 'application/octet-stream' }] });
       return json({}, 404);
     }) as typeof fetch;
-    const list = await listDrive('https://drive.google.com/drive/folders/ROOTFOLDER123', 'k', f);
+    const list = await listDrive('https://drive.google.com/drive/folders/ROOTFOLDER123', { key: 'k' }, f);
     expect(list.map((x) => x.name)).toEqual(['a.jpg', 'IMG_1.HEIC']);
   });
 
   it('explains a folder that is not shared publicly', async () => {
     const f = (async () => json({ error: { message: 'The user does not have sufficient permissions' } }, 403)) as unknown as typeof fetch;
-    await expect(listDrive('https://drive.google.com/drive/folders/PRIVATEFOLDER1', 'k', f)).rejects.toThrow(/Anyone with the link/);
+    await expect(listDrive('https://drive.google.com/drive/folders/PRIVATEFOLDER1', { key: 'k' }, f)).rejects.toThrow(/Anyone with the link/);
   });
 
   it('downloads with retries and reports failures', async () => {
@@ -47,11 +47,24 @@ describe('Google Drive links', () => {
         { id: 'gone', name: 'gone.jpg', mimeType: 'image/jpeg' },
       ],
       () => {},
-      'k',
+      { key: 'k' },
       f,
       { lanes: 2, tries: 3, pauseMs: 5, maxPauseMs: 20 },
     );
     expect(r.files.map((x) => x.name).sort()).toEqual(['flaky.jpg', 'ok.jpg']);
     expect(r.failed.map((x) => x.name)).toEqual(['gone.jpg']);
+  });
+});
+
+describe('signed-in Drive requests', () => {
+  it('send the token as a header and no API key', async () => {
+    const seen: { url: string; auth: string | null }[] = [];
+    const f = (async (url: string, init?: RequestInit) => {
+      seen.push({ url, auth: new Headers(init?.headers).get('authorization') });
+      return new Response(new Uint8Array([1]), { status: 200 });
+    }) as typeof fetch;
+    await downloadDrive([{ id: 'x', name: 'x.jpg', mimeType: 'image/jpeg' }], () => {}, { token: 'TOKEN' }, f);
+    expect(seen[0].auth).toBe('Bearer TOKEN');
+    expect(seen[0].url).not.toContain('key=');
   });
 });

@@ -17,7 +17,7 @@ import { sortByTime } from './import/sort';
 import { excerpt, loadSong, type Song } from './audio/song';
 import { maxPhotosForMusic, planMusicTimeline, songParts, type SongStart } from './render/musicTimeline';
 import { renderReel, type RenderJob } from './render/renderer';
-import { DRIVE_KEY, downloadDrive, listDrive } from './import/drive';
+import { DRIVE_CLIENT_ID, DRIVE_KEY, downloadDrive, listDrive, loadGoogleSignIn, signIn, type DriveAuth } from './import/drive';
 import { buildCaptions, loadPlaces, nearestPlace, photoLabels } from './render/captions';
 import type { Look } from './render/looks';
 import { frameFor } from './render/crop';
@@ -156,16 +156,33 @@ async function addFiles(list: FileList | File[], fromDrive: { skipped: { name: s
 // Google Drive: paste a folder link shared as "Anyone with the link".
 const driveForm = document.getElementById('drive-form') as HTMLFormElement;
 const driveLink = document.getElementById('drive-link') as HTMLInputElement;
-driveForm.hidden = !DRIVE_KEY;
+driveForm.hidden = !DRIVE_KEY && !DRIVE_CLIENT_ID;
+// Signed-in downloads: load Google's sign-in script as soon as you start on the link,
+// so the sign-in popup can open straight from the tap (browsers block late popups).
+let gis: ReturnType<typeof loadGoogleSignIn> | null = null;
+const warmSignIn = () => {
+  if (DRIVE_CLIENT_ID && !gis) {
+    gis = loadGoogleSignIn();
+    gis.catch(() => (gis = null));
+  }
+};
+driveLink.addEventListener('focus', warmSignIn);
+driveLink.addEventListener('input', warmSignIn);
 driveForm.addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const button = driveForm.querySelector('button')!;
   button.disabled = true;
   el.drop.classList.add('is-busy');
   try {
+    let auth: DriveAuth = { key: DRIVE_KEY };
+    if (DRIVE_CLIENT_ID) {
+      warmSignIn();
+      el.importStatus.textContent = 'Signing in to Google (read-only)…';
+      auth = { token: await signIn(await gis!) };
+    }
     el.importStatus.textContent = 'Opening the Drive link…';
     const t0 = performance.now();
-    const all = await listDrive(driveLink.value);
+    const all = await listDrive(driveLink.value, auth);
     if (!all.length) throw new Error('No photos in that link (videos and documents are skipped).');
     // Adding the same link again fetches only what's missing (e.g. after Google refused some).
     const have = new Set(photos.map((p) => p.name));
@@ -176,7 +193,7 @@ driveForm.addEventListener('submit', async (ev) => {
       el.importStatus.textContent =
         `Downloading from Drive ${done} of ${total} (${mins} min)… kept in this tab only, not saved to your phone.` +
         (waiting ? ` Google asked us to slow down; waiting ${waiting}s.` : '');
-    });
+    }, auth);
     const dlMin = ((performance.now() - t0) / 60000).toFixed(1);
     el.drop.classList.remove('is-busy');
     await addFiles(files, { skipped: failed });

@@ -3,8 +3,28 @@
 // held in memory like picked files, never saved to the phone's gallery or Downloads,
 // and never sent anywhere else.
 
-/** Set at build time from the GitHub secret GOOGLE_API_KEY. Empty = Drive links hidden. */
+/** Set at build time from the GitHub secret GOOGLE_API_KEY. */
 export const DRIVE_KEY: string = (import.meta.env.VITE_GOOGLE_API_KEY as string | undefined) ?? '';
+/**
+ * Set at build time from the GitHub secret GOOGLE_CLIENT_ID. With it, you sign in
+ * with Google (read-only) and downloads count against your own account. Without
+ * it, downloads are anonymous (API key), and Google throttles those hard after
+ * a few dozen photos (403 for a while).
+ */
+export const DRIVE_CLIENT_ID: string = (import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined) ?? '';
+
+/** How requests identify themselves: your sign-in (token) or the site's API key. */
+export interface DriveAuth {
+  key?: string;
+  token?: string;
+}
+const defaultAuth = (): DriveAuth => ({ key: DRIVE_KEY });
+
+/** Adds the key to the URL (anonymous) or the token as a header (signed in). */
+function call(f: Fetch, url: string, auth: DriveAuth) {
+  if (auth.token) return f(url, { headers: { Authorization: `Bearer ${auth.token}` } });
+  return f(`${url}&key=${encodeURIComponent(auth.key ?? '')}`);
+}
 
 const API = 'https://www.googleapis.com/drive/v3/files';
 const FOLDER = 'application/vnd.google-apps.folder';
@@ -50,20 +70,21 @@ async function failure(r: Response, what: string): Promise<Error> {
 
 type Fetch = typeof fetch;
 
-async function getJson(url: string, what: string, f: Fetch) {
-  const r = await f(url);
+async function getJson(url: string, what: string, f: Fetch, auth: DriveAuth) {
+  const r = await call(f, url, auth);
   if (!r.ok) throw await failure(r, what);
   return r.json();
 }
 
 /** Photos in a folder, including subfolders (2 levels: trip → day → photos). */
-export async function listDrive(link: string, key = DRIVE_KEY, f: Fetch = fetch, depth = 2): Promise<DriveFile[]> {
+export async function listDrive(link: string, auth: DriveAuth = defaultAuth(), f: Fetch = fetch, depth = 2): Promise<DriveFile[]> {
   const parsed = parseDriveLink(link);
   if (!parsed) throw new Error("That doesn't look like a Google Drive link. Open the folder in Drive, tap Share → Copy link, and paste it here.");
   const meta: DriveFile = await getJson(
-    `${API}/${parsed.id}?fields=id,name,mimeType,modifiedTime&supportsAllDrives=true&key=${encodeURIComponent(key)}`,
+    `${API}/${parsed.id}?fields=id,name,mimeType,modifiedTime&supportsAllDrives=true`,
     'This link',
     f,
+    auth,
   );
   if (meta.mimeType !== FOLDER) return isPhoto(meta) ? [meta] : [];
   const out: DriveFile[] = [];
@@ -72,9 +93,10 @@ export async function listDrive(link: string, key = DRIVE_KEY, f: Fetch = fetch,
     do {
       const q = encodeURIComponent(`'${folderId}' in parents and trashed = false`);
       const j = await getJson(
-        `${API}?q=${q}&fields=nextPageToken,files(id,name,mimeType,modifiedTime)&pageSize=1000&supportsAllDrives=true&includeItemsFromAllDrives=true&key=${encodeURIComponent(key)}${page ? `&pageToken=${page}` : ''}`,
+        `${API}?q=${q}&fields=nextPageToken,files(id,name,mimeType,modifiedTime)&pageSize=1000&supportsAllDrives=true&includeItemsFromAllDrives=true${page ? `&pageToken=${page}` : ''}`,
         'This folder',
         f,
+        auth,
       );
       for (const file of j.files as DriveFile[]) {
         if (file.mimeType === FOLDER) {
@@ -107,7 +129,7 @@ export const DRIVE_DOWNLOAD = {
 export async function downloadDrive(
   files: DriveFile[],
   onProgress: (done: number, total: number, waitingSec: number) => void,
-  key = DRIVE_KEY,
+  auth: DriveAuth = defaultAuth(),
   f: Fetch = fetch,
   o = DRIVE_DOWNLOAD,
 ): Promise<{ files: File[]; failed: { name: string; reason: string }[] }> {
@@ -131,7 +153,7 @@ export async function downloadDrive(
       const d = files[i];
       tries[i]++;
       try {
-        const r = await f(`${API}/${d.id}?alt=media&supportsAllDrives=true&key=${encodeURIComponent(key)}`);
+        const r = await call(f, `${API}/${d.id}?alt=media&supportsAllDrives=true`, auth);
         if (!r.ok) throw await failure(r, d.name);
         const blob = await r.blob();
         got[i] = new File([blob], d.name, {
@@ -154,7 +176,58 @@ export async function downloadDrive(
   };
   await Promise.all(Array.from({ length: o.lanes }, lane));
   const failed = files
-    .map((d, i) => (got[i] ? null : { name: d.name, reason: `Couldn't download from Drive after ${tries[i]} tries: ${/Failed to fetch/i.test(lastErr[i]) ? 'Google refused (too many downloads at once). Add the same link again later to fetch the rest; photos already added are skipped' : lastErr[i]}` }))
+    .map((d, i) => (got[i] ? null : { name: d.name, reason: `Couldn't download from Drive after ${tries[i]} tries: ${/Failed to fetch/i.test(lastErr[i]) ? auth.token ? 'Google refused; add the same link again in a minute to fetch the rest' : 'Google stopped anonymous downloads for a while (it allows only a few dozen). Sign in with Google, or add the same link again later to fetch the rest' : lastErr[i]}` }))
     .filter((x): x is { name: string; reason: string } => x !== null);
   return { files: got.filter((x): x is File => x !== null), failed };
+}
+
+// ---- Sign in with Google (read-only Drive) ------------------------------------------------
+
+interface TokenClient {
+  requestAccessToken(o?: { prompt?: string }): void;
+}
+interface Gis {
+  accounts: { oauth2: { initTokenClient(o: { client_id: string; scope: string; callback: (r: { access_token?: string; expires_in?: number; error?: string }) => void; error_callback?: (e: { type: string; message?: string }) => void }): TokenClient } };
+}
+
+const SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
+let gisLoading: Promise<Gis> | null = null;
+let token: { value: string; until: number } | null = null;
+
+/** Google's sign-in script, loaded only when Drive is used. */
+export function loadGoogleSignIn(): Promise<Gis> {
+  gisLoading ??= new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://accounts.google.com/gsi/client';
+    s.async = true;
+    s.onload = () => resolve((window as unknown as { google: Gis }).google);
+    s.onerror = () => {
+      gisLoading = null;
+      reject(new Error("Couldn't load Google sign-in (blocked or offline)."));
+    };
+    document.head.append(s);
+  });
+  return gisLoading;
+}
+
+/**
+ * Read-only access token for your Drive; kept in this tab's memory only.
+ * Must be called straight from a tap (the sign-in popup needs it), with the
+ * script already loaded.
+ */
+export function signIn(google: Gis): Promise<string> {
+  if (token && token.until > Date.now() + 60_000) return Promise.resolve(token.value);
+  return new Promise((resolve, reject) => {
+    const client = google.accounts.oauth2.initTokenClient({
+      client_id: DRIVE_CLIENT_ID,
+      scope: SCOPE,
+      callback: (r) => {
+        if (!r.access_token) return reject(new Error(`Google sign-in didn't complete (${r.error ?? 'cancelled'}).`));
+        token = { value: r.access_token, until: Date.now() + (r.expires_in ?? 3600) * 1000 };
+        resolve(r.access_token);
+      },
+      error_callback: (e) => reject(new Error(`Google sign-in didn't complete (${e.message ?? e.type}).`)),
+    });
+    client.requestAccessToken({ prompt: '' });
+  });
 }
