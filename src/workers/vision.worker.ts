@@ -82,6 +82,9 @@ async function init(base: string): Promise<string[]> {
   face = await stage(faceModel, () =>
     FaceLandmarker.createFromOptions(files, {
       baseOptions: { modelAssetBuffer: faceBytes, delegate: 'CPU' },
+      // Our own canvas: MediaPipe's check thinks Chrome on iPhone (and Safari < 17)
+      // lacks OffscreenCanvas and reaches for `document`, which workers don't have.
+      canvas: new OffscreenCanvas(1, 1),
       runningMode: 'IMAGE',
       numFaces: 12,
       minFaceDetectionConfidence: 0.6,
@@ -98,6 +101,7 @@ async function init(base: string): Promise<string[]> {
     pose = await stage(poseModel, () =>
       PoseLandmarker.createFromOptions(files, {
         baseOptions: { modelAssetBuffer: poseBytes, delegate: 'CPU' },
+        canvas: new OffscreenCanvas(1, 1),
         runningMode: 'IMAGE',
         numPoses: 6,
         minPoseDetectionConfidence: 0.6,

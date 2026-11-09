@@ -94,7 +94,9 @@ let songPart = 0;
 
 // ---- Build stamp (confirms which version is live) ------------------------------
 
-el.build.textContent = `Build ${__BUILD__}`;
+// Build stamp in this device's own time zone, e.g. "9 Nov 2026, 14:05".
+const BUILD = `${new Date(__BUILD_TIME__).toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })} · ${__BUILD_SHA__}`;
+el.build.textContent = `Build ${BUILD}`;
 
 // ---- Capability check --------------------------------------------------------
 
@@ -185,7 +187,7 @@ document.getElementById('debug-report')!.addEventListener('click', async (ev) =>
         picks: plan.picks,
         candidates: candidateIds(analysis, overrides),
         settings: { ...settings, song: song?.name ?? null, songStart, songPart, me: who.me ?? null },
-        build: __BUILD__,
+        build: BUILD,
       },
       (document.getElementById('debug-thumbs') as HTMLInputElement).checked,
     );
