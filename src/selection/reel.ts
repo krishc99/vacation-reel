@@ -3,7 +3,7 @@
 import { chapters } from '../analysis/chapters';
 import type { PhotoScore } from '../analysis/scoring';
 import type { Photo } from '../types';
-import { clipSim, coverFriends, ensureMe, isFood, isPeoplePhoto, SIMILAR, type Who } from './index';
+import { clipSim, coverFriends, ensureMe, isFood, isPeoplePhoto, limitSoloOthers, SIMILAR, type Who } from './index';
 
 /** Scene types that make a good chapter opener ("establishing shot"). */
 const ESTABLISHING = new Set(['scenery', 'landmark', 'city', 'sunset']);
@@ -107,6 +107,13 @@ export function chooseReel(candidates: Photo[], max: number, scores: Map<string,
   const byId = new Map(candidates.map((p) => [p.id, p]));
   const groups = chapters(candidates).map((ids) => ids.map((id) => byId.get(id)!));
   if (candidates.length <= max) {
+    // Everything fits, but still at most one solo photo of someone else.
+    const all = new Set(candidates);
+    const trimmed = limitSoloOthers(candidates, all, score, who);
+    if (trimmed) {
+      const kept = candidates.filter((p) => all.has(p));
+      return { picks: sequence(kept, groups, scores, who), droppedForLength: 0, chapters: groups.length, friendSwaps: trimmed };
+    }
     return { picks: sequence(candidates, groups, scores, who), droppedForLength: 0, chapters: groups.length, friendSwaps: 0 };
   }
   const slots = allocate(groups, max, score);
@@ -114,7 +121,8 @@ export function chooseReel(candidates: Photo[], max: number, scores: Map<string,
   const chosen: Photo[] = [];
   groups.forEach((g, i) => chosen.push(...pickChapter(g, slots[i], chosen, score, who, food)));
   const set = new Set(chosen);
-  const friendSwaps = coverFriends(candidates, set, score, who) + ensureMe(candidates, set, score, who);
+  const friendSwaps =
+    coverFriends(candidates, set, score, who) + ensureMe(candidates, set, score, who) + limitSoloOthers(candidates, set, score, who);
   const picked = candidates.filter((p) => set.has(p));
   return {
     picks: sequence(picked, groups, scores, who),

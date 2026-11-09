@@ -87,10 +87,15 @@
 
       <section id="make-section" class="step" aria-labelledby="step-make" hidden>
         <h2 id="step-make">Make the reel</h2>
+        <fieldset class="seg" aria-label="Look">
+          <label><input type="radio" name="look" id="look-clean" value="clean" checked /> <span>Clean</span></label>
+          <label><input type="radio" name="look" id="look-film" value="film" /> <span>Film <small>grain, light leaks, date stamp</small></span></label>
+          <label><input type="radio" name="look" id="look-scrapbook" value="scrapbook" /> <span>Scrapbook <small>polaroids on paper</small></span></label>
+        </fieldset>
         <div class="style-options">
           <label class="check" for="opt-motion">
             <input type="checkbox" id="opt-motion" checked />
-            <span>Slow zoom toward the people, crossfades between beats</span>
+            <span>Motion: slow zoom toward the people, a zoom punch on each bar, flash and sparkles when the chorus hits</span>
           </label>
           <label class="check" for="opt-captions">
             <input type="checkbox" id="opt-captions" />

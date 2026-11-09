@@ -20,7 +20,7 @@ export const SCORE_WEIGHTS = { Q: 0.15, F: 0.25, C: 0.15, M: 0.45 };
  * someone else (just them, not you) drop. Groups without you are unchanged.
  */
 export const ME_BOOST = 0.12;
-export const SOLO_OTHER_PENALTY = 0.15;
+export const SOLO_OTHER_PENALTY = 0.3;
 
 export interface PhotoScore {
   Q: number;

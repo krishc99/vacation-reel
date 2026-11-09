@@ -18,6 +18,7 @@ import { excerpt, loadSong, type Song } from './audio/song';
 import { maxPhotosForMusic, planMusicTimeline, songParts, type SongStart } from './render/musicTimeline';
 import { renderReel, type RenderJob } from './render/renderer';
 import { buildCaptions, loadPlaces, nearestPlace } from './render/captions';
+import { noteText, stampText, type Look } from './render/looks';
 import { frameFor } from './render/crop';
 import { buildTimeline, timelineDuration } from './render/timeline';
 import { NO_WHO, type Who } from './selection';
@@ -735,6 +736,7 @@ document.querySelectorAll<HTMLInputElement>('input[name="song-start"]').forEach(
 el.musicInFile.addEventListener('change', clearResult);
 el.optMotion.addEventListener('change', clearResult);
 el.optCaptions.addEventListener('change', clearResult);
+document.querySelectorAll<HTMLInputElement>('input[name="look"]').forEach((r) => r.addEventListener('change', clearResult));
 el.musicRemove.addEventListener('click', () => {
   stopPreview();
   song = null;
@@ -757,7 +759,7 @@ function clearResult() {
 }
 
 el.make.addEventListener('click', async () => {
-  const { picks, clips, audioStart } = currentPlan();
+  const { picks, clips, audioStart, highlight } = currentPlan();
   if (!picks.length) return;
   clearResult();
   const withAudio = song !== null && audioStart !== null && el.musicInFile.checked;
@@ -785,7 +787,20 @@ el.make.addEventListener('click', async () => {
     } else captionNote = ' No location in these photos, so captions show days only.';
     captions = buildCaptions(clips, picks, (p) => (places && p.lat !== null && p.lon !== null ? nearestPlace(places, p.lat, p.lon) : null));
   }
-  const style: ReelStyle = { motion: el.optMotion.checked, captions };
+  const look = (document.querySelector<HTMLInputElement>('input[name="look"]:checked')?.value ?? 'clean') as Look;
+  const stamps: Record<string, string> = {};
+  const notes: Record<string, string> = {};
+  for (const c of clips) {
+    const p = picks.find((x) => x.id === c.photoId)!;
+    const dated = p.timeSource === 'exif';
+    if (dated) stamps[p.id] = stampText(p.takenAt);
+    // Scrapbook note: the caption that starts on this photo, else its date.
+    const cap = captions.find((k) => k.start >= c.start && k.start < c.start + c.duration);
+    if (cap) notes[p.id] = cap.top ? `${cap.top} · ${cap.main}` : cap.main;
+    else if (dated) notes[p.id] = noteText(p.takenAt);
+  }
+  const accents = highlight !== null && audioStart !== null ? [highlight - audioStart] : [];
+  const style: ReelStyle = { motion: el.optMotion.checked, captions, look, accents, stamps, notes };
 
   job = renderReel(clips, picks, settings, style, (done, total, stage) => {
     const pct = total ? (done / total) * 100 : 0;

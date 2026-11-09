@@ -84,6 +84,12 @@ export interface ReelStyle {
   /** Slow zoom toward the people (Ken Burns). */
   motion: boolean;
   captions: Caption[];
+  look: import('./render/looks').Look;
+  /** Reel times of the big musical moment (chorus hit): flash + sparkles. */
+  accents: number[];
+  /** Per photo id: film date stamp ("6 01 '26") and scrapbook note ("3 June" / caption). */
+  stamps: Record<string, string>;
+  notes: Record<string, string>;
 }
 
 // ---- Worker protocols -------------------------------------------------------

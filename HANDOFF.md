@@ -169,6 +169,14 @@ UI                  Make section: "Slow zoom…" (on), "Captions" (off). Places 
 ```
 Verified: 80 unit tests. E2E 50-photo GPS album (Lisbon/Sintra/Algés, 3 days) + 120 BPM song: hard cuts every 2 s on downbeats, fades between, zoom visible, captions June 2026/Sintra → Day 1/Lisbon → Day 2/Sintra → Day 3/Algés. Render 20 s reel in ~18 s desktop (static frames before; phones slower).
 
+## 7h+. Looks + solo cap (Krish: "max ~1 solo photo of others"; "more creative, pinteresty overlays")
+```
+selection    isSoloOther (me marked, exactly 1 friend ≠ me, count ≤ 2); limitSoloOthers keeps ≤ SOLO_OTHER_MAX=1 (best), swaps rest for best unpicked people photo (with me / group) else any non-near-repeat; runs LAST in chooseReel (also when all candidates fit) and selectPhotos → beats coverFriends for solo-only friends. SOLO_OTHER_PENALTY .3
+render/looks.ts  Look clean|film|scrapbook. punchAt (+4.5% zoom on hard cuts, .28 s), flashAt (.6 white, .3 s), sparkles (7 four-point stars, away from centre) at style.accents = chorus hit (plan.highlight − audioStart); leakAt; polaroid geometry (4:5 vertical / 4:3 horizontal, thick bottom); restingPose (±1.5–4°, jitter), dropPose (easeOutBack from below, lands ON the beat); stampText "6 01 '26", noteText "3 June"
+worker       film: soft-light warm + screen lift + 2 drifting leaks (flare ±.16 s around cuts) + 4 half-res grain frames (overlay .32) + vignette + orange stamp (.8w,.8h). scrapbook: paper (fibres, dot grid, vignette), cards k=i−2..i+1, photo framed into polaroid window (frameFor with inner size), washi tape (pastel, torn ends), handwritten note = caption starting on that clip else date; no overlay captions, no crossfades, no flash. Shots kept k ≥ i−2
+UI           Look radio (default Clean) in Make section; motion checkbox also controls punch
+```
+
 ## 7f. Milestone 6 scope — fun modes (plan)
 Funny (jawOpen/mouthPucker/cheekPuff/eyeWide*/browInnerUp high; wink OK, half-closed both = blink), Laugh (eyes closed + big smile + open jaw), Scenic from behind (shoulders, no nose/eyes; judge scenery sharpness + framing, people small), Jump/arms up (wrists above head; highest body frame in burst). Intentional vs accidental: shared or held deviations intentional; one person in one frame accidental. A burst can yield several keepers (one per mode). Mix ~1 fun per 4–5 classic, spread out (M7 sequencing).
 

@@ -83,6 +83,39 @@ export function ensureMe(all: Photo[], picks: Set<Photo>, score: (p: Photo) => n
   return swaps;
 }
 
+/** Once you've marked yourself: a photo of just one other friend (not you, not a group). */
+export function isSoloOther(p: Photo, who: Who): boolean {
+  if (!who.me) return false;
+  const f = who.friends(p);
+  return f.length === 1 && f[0] !== who.me && (p.people?.count ?? 0) <= 2;
+}
+
+/** Krish: "I wouldn't want to see more than 1" solo photo of someone else. */
+export const SOLO_OTHER_MAX = 1;
+
+/**
+ * Keeps at most SOLO_OTHER_MAX solo photos of other people (the best ones),
+ * swapping the rest for the best unpicked photo with you or a group, else any
+ * other photo that isn't a near-repeat of a pick. Runs last, so it wins over
+ * "every friend appears once" for friends who only have solo photos.
+ */
+export function limitSoloOthers(all: Photo[], picks: Set<Photo>, score: (p: Photo) => number, who: Who, max = SOLO_OTHER_MAX): number {
+  if (!who.me) return 0;
+  let swaps = 0;
+  for (;;) {
+    const solos = [...picks].filter((p) => isSoloOther(p, who)).sort((a, b) => score(a) - score(b));
+    if (solos.length <= max) return swaps;
+    const victim = solos[0];
+    const rank = (p: Photo) => (isPeoplePhoto(p, who) ? 1 : 0) * 10 + score(p);
+    const incoming = all
+      .filter((p) => !picks.has(p) && !isSoloOther(p, who) && ![...picks].some((q) => q !== victim && clipSim(p, q) >= SIMILAR))
+      .sort((a, b) => rank(b) - rank(a))[0];
+    picks.delete(victim);
+    if (incoming) picks.add(incoming);
+    swaps++;
+  }
+}
+
 /** Best-scoring photo from each of `slots` equal runs of consecutive photos (keeps time spread). */
 function spread(photos: Photo[], slots: number, score: (p: Photo) => number): Photo[] {
   if (slots <= 0) return [];
@@ -216,7 +249,7 @@ export function selectPhotos(
   const people = photos.filter((p) => isPeoplePhoto(p, who));
   const others = photos.filter((p) => !isPeoplePhoto(p, who));
   const chosen = new Set([...spread(people, max, score), ...fillOthers(others, max - Math.min(max, people.length), score)]);
-  const friendSwaps = coverFriends(photos, chosen, score, who) + ensureMe(photos, chosen, score, who);
+  const friendSwaps = coverFriends(photos, chosen, score, who) + ensureMe(photos, chosen, score, who) + limitSoloOthers(photos, chosen, score, who);
   const varietySwaps = diversify(photos, chosen, score, who);
   const picks = photos.filter((p) => chosen.has(p));
   return { picks, droppedForLength: photos.length - picks.length, friendSwaps, varietySwaps };

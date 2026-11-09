@@ -94,3 +94,16 @@ describe('selectPhotos (people first)', () => {
     expect(selectPhotos(photos, 5).picks).toHaveLength(2);
   });
 });
+
+describe('limitSoloOthers', () => {
+  it('keeps at most one solo photo of someone else, swapping in photos with you or groups', async () => {
+    const { limitSoloOthers } = await import('./index');
+    const ids: Record<string, string[]> = { s1: ['a'], s2: ['b'], s3: ['c'], g1: ['a', 'b'], m1: ['me'], m2: ['me', 'c'], x: [] };
+    const all = Object.keys(ids).map((id) => photo(id, ids[id].length));
+    const who = { friends: (p: Photo) => ids[p.id], known: true, me: 'me' };
+    const score: Record<string, number> = { s1: 0.9, s2: 0.8, s3: 0.7, g1: 0.3, m1: 0.2, m2: 0.1, x: 0.95 };
+    const picks = new Set(all.filter((p) => p.id.startsWith('s')));
+    limitSoloOthers(all, picks, (p) => score[p.id], who);
+    expect([...picks].map((p) => p.id).sort()).toEqual(['g1', 'm1', 's1']);
+  });
+});
