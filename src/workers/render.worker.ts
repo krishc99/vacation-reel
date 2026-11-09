@@ -650,7 +650,10 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
           ctx.fillRect(cell.x, cell.y, cell.w, cell.h);
         }
       }
-      const label = style.notes[clips[members[0]].photoId] ?? '';
+      // A strip only gets a label when it differs from the strip before it.
+      const prevFirst = groups.findIndex((g) => g && g.strip === stripNo - 1);
+      const raw = style.notes[clips[members[0]].photoId] ?? '';
+      const label = prevFirst >= 0 && (style.notes[clips[prevFirst].photoId] ?? '') === raw ? '' : raw;
       if (label) {
         ctx.fillStyle = '#2a2622';
         ctx.textAlign = 'center';
@@ -781,7 +784,10 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
       else if (look === 'split') await drawSplit(t, i);
       else {
         await drawFull(t, i);
-        if (look === 'film') drawFilm(ctx, grainKit!, t, frame, i, style.stamps[c.photoId], W, H);
+        // Date stamp only when the date changes from the photo before.
+        const stamp = style.stamps[c.photoId];
+        const prevStamp = i > 0 ? style.stamps[clips[i - 1].photoId] : undefined;
+        if (look === 'film') drawFilm(ctx, grainKit!, t, frame, i, stamp !== prevStamp ? stamp : undefined, W, H);
       }
       drawAccents(ctx, accents, t, W, H, FLASH.has(look), SPARKLES.has(look));
       if (OVERLAY_CAPTIONS.has(look)) for (const cap of style.captions) if (t >= cap.start && t < cap.end) drawCaption(ctx, cap, t, W, H);

@@ -30,3 +30,18 @@ describe('captions', () => {
     for (let i = 1; i < caps.length; i++) expect(caps[i].start).toBeGreaterThanOrEqual(caps[i - 1].end);
   });
 });
+
+describe('no repeated captions', () => {
+  it('shows a caption only when it says something new', async () => {
+    const { buildCaptions } = await import('./captions');
+    const day = (d: number, h: number) => new Date(2026, 5, d, h).getTime();
+    const ph = (id: string, t: number) => ({ id, takenAt: t, timeSource: 'exif', lat: 1, lon: 1 }) as unknown as Photo;
+    // Lisbon, Sintra, back to Lisbon on the same day: "Day 1 / Lisbon" isn't shown twice.
+    const photos = [ph('h', day(1, 8)), ph('a', day(1, 9)), ph('b', day(1, 12)), ph('c', day(1, 15)), ph('d', day(1, 16)), ph('z', day(1, 17))];
+    const place: Record<string, string> = { h: 'Lisbon', a: 'Lisbon', b: 'Sintra', c: 'Lisbon', d: 'Lisbon', z: 'Lisbon' };
+    const clips: Clip[] = photos.map((p, i) => ({ photoId: p.id, start: i * 3, duration: 3 }));
+    const caps = buildCaptions(clips, photos, (p) => place[p.id]);
+    const texts = caps.map((c) => `${c.top}|${c.main}`);
+    expect(new Set(texts).size).toBe(texts.length);
+  });
+});

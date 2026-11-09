@@ -100,11 +100,18 @@ export function buildCaptions(clips: Clip[], photos: Photo[], placeOf: (p: Photo
   const multiDay = new Set(dated.map((p) => dayStart(p.takenAt))).size > 1;
   const end = clips[clips.length - 1].start + clips[clips.length - 1].duration;
   const out: Caption[] = [];
-  const show = (top: string, main: string, i: number) => {
+  // Never the same caption twice (Krish): only show one when it says something new.
+  const shown = new Set<string>();
+  const show = (top: string, main: string, i: number): boolean => {
+    const key = `${top}|${main}`.toLowerCase();
+    if (shown.has(key)) return false;
+    shown.add(key);
     const c = clips[i];
     const start = c.start + (i === 0 ? 0.25 : 0.1);
     const stop = Math.min(end - 0.1, Math.max(c.start + c.duration - 0.05, start + CAPTIONS.minShow));
-    if (stop - start >= 1) out.push({ top, main, start, end: stop });
+    if (stop - start < 1) return false;
+    out.push({ top, main, start, end: stop });
+    return true;
   };
 
   // Title: most common place, and the month.
@@ -134,10 +141,8 @@ export function buildCaptions(clips: Clip[], photos: Photo[], placeOf: (p: Photo
     if (day !== null) lastDay = day;
     if (clips[i].start - lastStart < CAPTIONS.minGap) continue;
     const dayText = multiDay && day !== null ? `Day ${day}` : '';
-    if (place) show(dayText, place, i);
-    else if (dayText) show('', dayText, i);
-    else continue;
-    lastStart = clips[i].start;
+    const said = place ? show(dayText, place, i) : dayText ? show('', dayText, i) : false;
+    if (said) lastStart = clips[i].start;
   }
   // Never overlap: each caption ends before the next begins.
   for (let k = 0; k + 1 < out.length; k++) out[k].end = Math.min(out[k].end, out[k + 1].start - 0.05);
