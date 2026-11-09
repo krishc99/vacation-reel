@@ -4,6 +4,7 @@
 import { ALL_FORMATS, BlobSource, CanvasSink, Input } from 'mediabunny';
 import { toGray } from '../analysis/pixels';
 import { subjectSharpness } from '../analysis/quality';
+import { readVideoMeta, utcToWallClock } from './videoMeta';
 import { copiesOf, errorText, unreadable, UNREADABLE_HELP, type PhotoMsg, type SkippedMsg } from './process';
 
 export const VIDEO = {
@@ -95,9 +96,14 @@ export async function processVideo(id: string, file: File): Promise<PhotoMsg | S
     const big = new CanvasSink(track, long > 2560 ? (track.displayWidth >= track.displayHeight ? { width: 2560 } : { height: 2560 }) : {});
     const frame = await big.getCanvas(m.poster);
     if (!frame) throw new Error('could not read a frame');
-    const date = (tags as { date?: Date }).date;
-    const msg = await copiesOf(id, frame.canvas as OffscreenCanvas, { takenAt: date && !isNaN(date.getTime()) ? date.getTime() : null, lat: null, lon: null }, file.lastModified);
-    return { ...msg, video: { file, duration, start: m.start, end: m.end, hasAudio: !!audio } };
+    // When and where: the container's own dates and location (iPhone local time with
+    // zone; Android UTC, corrected to the trip's clock after import), else the tag.
+    const meta = await readVideoMeta(file);
+    const tagDate = (tags as { date?: Date }).date;
+    const takenAt = meta.wallClock ?? (meta.utc !== null ? utcToWallClock(meta.utc, null) : tagDate && !isNaN(tagDate.getTime()) ? tagDate.getTime() : null);
+    const msg = await copiesOf(id, frame.canvas as OffscreenCanvas, { takenAt, lat: meta.lat, lon: meta.lon }, file.lastModified);
+    const utc = meta.wallClock === null && meta.utc !== null ? meta.utc : undefined;
+    return { ...msg, video: { file, duration, start: m.start, end: m.end, hasAudio: !!audio, utc } };
   } catch (err) {
     const reason = unreadable(err) ? UNREADABLE_HELP : `Could not read this video (${errorText(err)})`;
     return { type: 'skipped', id, name: file.name, reason };

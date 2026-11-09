@@ -175,6 +175,15 @@ export function dedupeReel(
           : score(a) >= score(b)
             ? [a, b]
             : [b, a];
+    // Photo vs video of the same moment: the video wins if it has at least as many
+    // people and is reasonably sharp (Krish: videos were being dropped as repeats).
+    if (!!a.video !== !!b.video) {
+      const vid = a.video ? a : b;
+      const pic = vid === a ? b : a;
+      const nv = vid === a ? na : nb;
+      const np = vid === a ? nb : na;
+      if (nv >= np && quality(vid) >= 0.4) [keep, drop] = [vid, pic];
+    }
     // Don't lose someone's only photo: then drop the other one.
     const count = new Map<string, number>();
     for (const q of picks) for (const f of who.friends(q)) count.set(f, (count.get(f) ?? 0) + 1);

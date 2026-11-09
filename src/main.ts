@@ -20,6 +20,7 @@ import { renderReel, type RenderJob } from './render/renderer';
 import { DRIVE_CLIENT_ID, DRIVE_KEY, downloadDrive, listDrive, loadGoogleSignIn, signIn, type DriveAuth } from './import/drive';
 import { hamming } from './analysis/dhash';
 import { isVideoFile } from './import/process';
+import { utcToWallClock } from './import/videoMeta';
 import { buildReport } from './debug/report';
 import { buildCaptions, loadPlaces, nearestPlace, photoLabels } from './render/captions';
 import type { Look } from './render/looks';
@@ -141,6 +142,11 @@ async function addFiles(list: FileList | File[], fromDrive: { skipped: { name: s
     }
     added.length = 0;
     added.push(...kept);
+    // Videos that only know UTC: put them on the trip's clock (the photos' time zone).
+    const zones = new Map<number, number>();
+    for (const p of [...photos, ...added]) if (p.tzOffset != null) zones.set(p.tzOffset, (zones.get(p.tzOffset) ?? 0) + 1);
+    const tripZone = [...zones].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+    for (const p of added) if (p.video?.utc !== undefined) p.takenAt = utcToWallClock(p.video.utc, tripZone);
     photos = sortByTime([...photos, ...added]);
     analysis = analyzeAlbum(photos);
     // Burst ids are positional, so keeper picks don't survive a re-analysis.

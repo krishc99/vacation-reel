@@ -4,13 +4,15 @@ export interface ExifInfo {
   takenAt: number | null;
   lat: number | null;
   lon: number | null;
+  /** Time zone of the capture time, minutes east of UTC (OffsetTimeOriginal), if the camera wrote it. */
+  tzOffset: number | null;
 }
 
-const EMPTY: ExifInfo = { takenAt: null, lat: null, lon: null };
+const EMPTY: ExifInfo = { takenAt: null, lat: null, lon: null, tzOffset: null };
 // exifr computes latitude/longitude from the raw GPS tags, so those must be picked too.
 const OPTIONS = {
   gps: true,
-  pick: ['DateTimeOriginal', 'CreateDate', 'GPSLatitude', 'GPSLatitudeRef', 'GPSLongitude', 'GPSLongitudeRef'],
+  pick: ['DateTimeOriginal', 'CreateDate', 'OffsetTimeOriginal', 'OffsetTime', 'GPSLatitude', 'GPSLatitudeRef', 'GPSLongitude', 'GPSLongitudeRef'],
 };
 
 function toInfo(data: Record<string, unknown> | undefined | null): ExifInfo {
@@ -19,7 +21,9 @@ function toInfo(data: Record<string, unknown> | undefined | null): ExifInfo {
   const takenAt = date instanceof Date && !isNaN(date.getTime()) ? date.getTime() : null;
   const lat = typeof data.latitude === 'number' ? data.latitude : null;
   const lon = typeof data.longitude === 'number' ? data.longitude : null;
-  return { takenAt, lat, lon };
+  const off = String(data.OffsetTimeOriginal ?? data.OffsetTime ?? '').match(/^([+-])(\d{2}):?(\d{2})$/);
+  const tzOffset = off ? (off[1] === '-' ? -1 : 1) * (Number(off[2]) * 60 + Number(off[3])) : null;
+  return { takenAt, lat, lon, tzOffset };
 }
 
 /**

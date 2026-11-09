@@ -227,6 +227,7 @@ export async function importPhotos(
         stats: msg.stats,
         dhash: msg.dhash,
         video: msg.video,
+        tzOffset: msg.tzOffset,
       });
     } else {
       skipped.push({ name: msg.name, reason: msg.reason });

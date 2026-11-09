@@ -72,7 +72,7 @@ export const UNREADABLE_HELP = "Couldn't read this file from your device. Try pi
 export async function copiesOf(
   id: string,
   full: CanvasImageSource & { width: number; height: number },
-  meta: { takenAt: number | null; lat: number | null; lon: number | null },
+  meta: { takenAt: number | null; lat: number | null; lon: number | null; tzOffset?: number | null },
   fallbackTime: number,
 ): Promise<PhotoMsg> {
   const width = full.width;
@@ -94,6 +94,7 @@ export async function copiesOf(
     timeSource: meta.takenAt != null ? 'exif' : 'file',
     lat: meta.lat,
     lon: meta.lon,
+    tzOffset: meta.tzOffset ?? null,
     width,
     height,
     thumb,
@@ -125,7 +126,7 @@ export async function processPhoto(id: string, file: File): Promise<PhotoMsg | S
   try {
     const isHeif = await looksLikeHeif(file);
     const exif = await readExif(file, isHeif);
-    return await copiesOf(id, full, { takenAt: exif.takenAt, lat: exif.lat, lon: exif.lon }, file.lastModified);
+    return await copiesOf(id, full, exif, file.lastModified);
   } catch (err) {
     try {
       full.close();

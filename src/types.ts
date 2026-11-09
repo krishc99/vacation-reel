@@ -17,6 +17,8 @@ export interface VideoInfo {
   start: number;
   end: number;
   hasAudio: boolean;
+  /** Capture instant (UTC) when the file had no local time; corrected to the trip's clock after import. */
+  utc?: number;
 }
 
 export interface Photo {
@@ -30,6 +32,8 @@ export interface Photo {
   timeSource: 'exif' | 'file';
   lat: number | null;
   lon: number | null;
+  /** Camera's time zone (minutes east of UTC) when known. */
+  tzOffset?: number | null;
   /** Decoded pixel size after EXIF orientation is applied. */
   width: number;
   height: number;
@@ -143,6 +147,7 @@ export type ImportResponse =
       stats: QualityStats;
       dhash: DHash;
       video?: VideoInfo;
+      tzOffset?: number | null;
     }
   | { type: 'skipped'; id: string; name: string; reason: string }
   | { type: 'ready' }
