@@ -15,7 +15,7 @@ import { SCENE_LABEL, SCENES_ENABLED } from './analysis/scenes';
 import { importPhotos } from './import/importer';
 import { sortByTime } from './import/sort';
 import { excerpt, loadSong, type Song } from './audio/song';
-import { maxPhotosForMusic, planMusicTimeline, songParts, type SongStart } from './render/musicTimeline';
+import { maxPhotosForMusic, MUSIC_DEFAULTS, planMusicTimeline, songParts, type SongStart } from './render/musicTimeline';
 import { renderReel, type RenderJob } from './render/renderer';
 import { DRIVE_CLIENT_ID, DRIVE_KEY, downloadDrive, listDrive, loadGoogleSignIn, signIn, type DriveAuth } from './import/drive';
 import { hamming } from './analysis/dhash';
@@ -25,7 +25,7 @@ import { buildReport } from './debug/report';
 import { buildCaptions, loadPlaces, nearestPlace, photoLabels } from './render/captions';
 import type { Look } from './render/looks';
 import { frameFor } from './render/crop';
-import { buildTimeline, mergeSlots, timelineDuration, videoSlots } from './render/timeline';
+import { buildTimeline, mergeSlots, slotsFor, timelineDuration, videoSlots } from './render/timeline';
 import { NO_WHO, type Who } from './selection';
 import { chooseReel } from './selection/reel';
 import { chapters } from './analysis/chapters';
@@ -724,11 +724,11 @@ function currentPlan(): Plan {
   const reel = chooseReel(candidates, max, lastScores, who);
   const { picks, droppedForLength } = reel;
   lastChapters = reel.chapters;
-  // Videos use two beat slots: if that overflows the length, drop the weakest photos.
-  const isVid = (id: string) => !!byId.get(id)?.video;
+  // Videos use several beat slots (about their length): if that overflows, drop the weakest photos.
+  const slots = (p: Photo) => (p.video ? slotsFor(p.video.end - p.video.start, MUSIC_DEFAULTS.targetCut) : 1);
   let kept = picks;
   if (song) {
-    while (kept.length > 1 && kept.length + kept.filter((p) => p.video).length > max) {
+    while (kept.length > 1 && kept.reduce((a, p) => a + slots(p), 0) > max) {
       const weakest = kept.filter((p, i) => i > 0 && !p.video).sort((a, b) => (lastScores.get(a.id)?.score ?? 0) - (lastScores.get(b.id)?.score ?? 0))[0];
       if (!weakest) break;
       kept = kept.filter((p) => p !== weakest);
@@ -736,7 +736,7 @@ function currentPlan(): Plan {
   }
   if (!song) {
     // Videos run 2–4 s, so the reel can run long: drop the weakest photos to fit.
-    const dur = (p: Photo) => (p.video ? Math.min(4, Math.max(2, p.video.end - p.video.start)) : settings.secondsPerPhoto);
+    const dur = (p: Photo) => (p.video ? Math.min(6, Math.max(2, p.video.end - p.video.start)) : settings.secondsPerPhoto);
     while (kept.length > 1 && kept.reduce((a, p) => a + dur(p), 0) > settings.maxSeconds + 1e-6) {
       const weakest = kept.filter((p, i) => i > 0 && !p.video).sort((a, b) => (lastScores.get(a.id)?.score ?? 0) - (lastScores.get(b.id)?.score ?? 0))[0];
       if (!weakest) break;
@@ -745,13 +745,13 @@ function currentPlan(): Plan {
   }
   const ids = kept.map((p) => p.id);
   if (song && ids.length) {
-    const m = planMusicTimeline(videoSlots(ids, isVid), song.beats, settings, songStart, songPart);
+    const m = planMusicTimeline(videoSlots(ids, (id) => slots(byId.get(id)!)), song.beats, settings, songStart, songPart);
     return { picks: kept, clips: mergeSlots(m.clips), droppedForLength: droppedForLength + picks.length - kept.length, audioStart: m.audioStart, highlight: m.highlight, coversSection: m.coversSection };
   }
-  // No music: a video plays its moment (2–4 s), photos the usual 1.5 s.
+  // No music: a video plays its moment (2–6 s), photos the usual 1.5 s.
   const durationOf = (id: string) => {
     const v = byId.get(id)?.video;
-    return v ? Math.min(4, Math.max(2, v.end - v.start)) : settings.secondsPerPhoto;
+    return v ? Math.min(6, Math.max(2, v.end - v.start)) : settings.secondsPerPhoto;
   };
   return { picks: kept, clips: buildTimeline(ids, settings, durationOf), droppedForLength, audioStart: null, highlight: null, coversSection: false };
 }
