@@ -18,12 +18,16 @@ export function buildTimeline(photoIds: string[], s: ReelSettings, durationOf: (
 }
 
 /**
- * Videos take two beat slots in a music plan: expand ids to slots, then merge a
- * video's two consecutive clips back into one.
+ * A video takes several photo slots in a music plan, about as many as its
+ * moment lasts (2–7): expand ids to slots, then merge a video's consecutive
+ * clips back into one.
  */
-export function videoSlots(ids: string[], isVideo: (id: string) => boolean): string[] {
-  return ids.flatMap((id) => (isVideo(id) ? [id, id] : [id]));
+export function videoSlots(ids: string[], slotsOf: (id: string) => number): string[] {
+  return ids.flatMap((id) => Array.from({ length: Math.max(1, slotsOf(id)) }, () => id));
 }
+
+/** Slots for a video moment of `seconds` at about `perSlot` seconds a photo. */
+export const slotsFor = (seconds: number, perSlot: number) => Math.min(7, Math.max(2, Math.round(seconds / perSlot)));
 export function mergeSlots(clips: Clip[]): Clip[] {
   const out: Clip[] = [];
   for (const c of clips) {
